@@ -5,6 +5,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+      network: host
       args:
         # Pasar UID y GID desde .env
         USER_UID: ${UID:-1000}

@@ -74,7 +74,7 @@ class CoppeliaInterfaceNode(Node):
 
         self.pose_pub = self.create_publisher(PoseStamped, '/robot/pose', 10)
         self.odom_pub = self.create_publisher(Odometry, '/odom', 10)
-        self.scan_pub = self.create_publisher(LaserScan, '/scan', 10)
+        self.scan_pub = self.create_publisher(LaserScan, '/scan', 20)
 
         self.sonar_pubs = {i: self.create_publisher(Range, f'/robot/sonar_{i}', 10) for i in range(1, 17)}
 
