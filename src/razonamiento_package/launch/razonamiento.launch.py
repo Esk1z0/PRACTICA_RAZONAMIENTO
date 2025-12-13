@@ -21,7 +21,7 @@ def generate_launch_description():
     # slam_toolbox params
     declare_slam_params = DeclareLaunchArgument(
         'slam_params_file',
-        default_value='/ros2_ws/src/entrega_mapas_package/config/slam_toolbox_params.yaml'
+        default_value='/ros2_ws/src/razonamiento_package/config/slam_toolbox_params.yaml'
     )
 
     robot_name = LaunchConfiguration('robot_name')
@@ -36,7 +36,7 @@ def generate_launch_description():
     slam_params_file = LaunchConfiguration('slam_params_file')
 
     coppelia_interface = Node(
-        package='entrega_mapas_package',
+        package='razonamiento_package',
         executable='coppelia_interface_node',
         name='coppelia_interface',
         output='screen',
@@ -74,7 +74,7 @@ def generate_launch_description():
     )
 
     bug2_controller = Node(
-        package='entrega_mapas_package',
+        package='razonamiento_package',
         executable='bug2_controller_node',   # OJO: que este nombre exista en console_scripts
         name='bug2_controller',
         output='screen',
@@ -104,7 +104,7 @@ def generate_launch_description():
 
 
     goal_manager = Node(
-        package='entrega_mapas_package',
+        package='razonamiento_package',
         executable='goal_manager_node',
         name='goal_manager',
         output='screen',
@@ -125,7 +125,7 @@ def generate_launch_description():
     )
 
     llm_input_bridge = Node(
-        package='entrega_mapas_package',
+        package='razonamiento_package',
         executable='llm_input_bridge_node',
         name='llm_input_bridge',
         output='screen',

@@ -20,6 +20,7 @@ RUN apt-get update && apt-get install -y \
     tree \
     vim \
     nano \
+    jq \
     ros-humble-slam-toolbox \
     ros-humble-nav2-map-server \
     && rm -rf /var/lib/apt/lists/*
