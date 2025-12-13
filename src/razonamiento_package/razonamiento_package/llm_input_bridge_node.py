@@ -1,19 +1,19 @@
 #!/usr/bin/env python3
 # llm_input_bridge_node.py
 #
-# Sensores/estado -> contrato JSON input para LLM.
-# Mock: genera una respuesta JSON output sin LLM real.
+# ROS2 -> JSON de entrada para LLM (incluye mapa como PNG base64 opcional).
 #
-# Topics (tu stack actual):
-#   - /robot/pose  [geometry_msgs/PoseStamped]
-#   - /goal        [geometry_msgs/PoseStamped]
+# Subs:
+#   - /robot/pose      [geometry_msgs/PoseStamped]
+#   - /goal            [geometry_msgs/PoseStamped]
 #   - /robot/sonar_1..16 [sensor_msgs/Range]
-#   - /map         [nav_msgs/OccupancyGrid] (opcional)
+#   - /map             [nav_msgs/OccupancyGrid] (opcional)
 #
-# Publica:
-#   - /llm/input_json   [std_msgs/String]
-#   - /llm/output_json  [std_msgs/String] (mock o real)
+# Pub:
+#   - /llm/input_json  [std_msgs/String]
+#   - /llm/output_json [std_msgs/String] (mock opcional)
 
+import base64
 import json
 import math
 import time
@@ -28,9 +28,11 @@ from geometry_msgs.msg import PoseStamped
 from sensor_msgs.msg import Range
 from nav_msgs.msg import OccupancyGrid
 
+import numpy as np
+import cv2
+
 
 def _yaw_from_quat(q) -> float:
-    # yaw = atan2(2*(w*z + x*y), 1 - 2*(y^2 + z^2))
     return math.atan2(
         2.0 * (q.w * q.z + q.x * q.y),
         1.0 - 2.0 * (q.y * q.y + q.z * q.z)
@@ -52,23 +54,36 @@ class LLMInputBridgeNode(Node):
         # =========================
         # Parámetros
         # =========================
-        self.declare_parameter('publish_rate_hz', 2.0)        # frecuencia de JSON input
-        self.declare_parameter('mock_mode', True)             # si True: genera output simulado
-        self.declare_parameter('mock_latency_ms', 150)        # latencia artificial del “LLM”
-        self.declare_parameter('max_sonar_range', 5.0)        # coherente con Range.max_range
-        self.declare_parameter('robot_frame', 'world')        # consistencia con tu stack
-        self.declare_parameter('include_map_snapshot', True)  # añade metadatos /map
-        self.declare_parameter('map_downsample', 8)           # reduce carga del mapa (factor)
-        self.declare_parameter('map_max_cells', 4096)         # límite duro del payload
+        self.declare_parameter('publish_rate_hz', 2.0)        # Hz del JSON input
+        self.declare_parameter('mock_mode', True)             # publica /llm/output_json simulado
+        self.declare_parameter('mock_latency_ms', 0)          # latencia artificial del “LLM” simulado
+        self.declare_parameter('max_sonar_range', 5.0)
+        self.declare_parameter('robot_frame', 'world')
+
+        # MAPA -> PNG
+        self.declare_parameter('include_map', True)           # si False: no incluye nada de /map
+        self.declare_parameter('map_as_png', True)            # True: PNG base64 (recomendado)
+        self.declare_parameter('map_downsample', 8)           # factor de reducción (8 = muy ligero)
+        self.declare_parameter('map_png_max_bytes', 250000)   # límite del base64 (aprox) para no explotar el payload
+        self.declare_parameter('map_png_flip_y', True)        # OccupancyGrid suele venir con (0,0) en esquina; flip para “verlo” mejor
+        self.declare_parameter('map_png_unknown', 127)        # gris para unknown (-1)
+        self.declare_parameter('map_png_free', 255)           # blanco para libre (0)
+        self.declare_parameter('map_png_occ', 0)              # negro para ocupado (100)
 
         self.publish_rate_hz = float(self.get_parameter('publish_rate_hz').value)
         self.mock_mode = bool(self.get_parameter('mock_mode').value)
         self.mock_latency_ms = int(self.get_parameter('mock_latency_ms').value)
         self.max_sonar_range = float(self.get_parameter('max_sonar_range').value)
         self.robot_frame = str(self.get_parameter('robot_frame').value)
-        self.include_map_snapshot = bool(self.get_parameter('include_map_snapshot').value)
+
+        self.include_map = bool(self.get_parameter('include_map').value)
+        self.map_as_png = bool(self.get_parameter('map_as_png').value)
         self.map_downsample = int(self.get_parameter('map_downsample').value)
-        self.map_max_cells = int(self.get_parameter('map_max_cells').value)
+        self.map_png_max_bytes = int(self.get_parameter('map_png_max_bytes').value)
+        self.map_png_flip_y = bool(self.get_parameter('map_png_flip_y').value)
+        self.map_png_unknown = int(self.get_parameter('map_png_unknown').value)
+        self.map_png_free = int(self.get_parameter('map_png_free').value)
+        self.map_png_occ = int(self.get_parameter('map_png_occ').value)
 
         # =========================
         # Estado interno
@@ -78,7 +93,7 @@ class LLMInputBridgeNode(Node):
         self.sonars: Dict[int, Range] = {}
         self.map_msg: Optional[OccupancyGrid] = None
 
-        # Mapeo de ángulos (como en Bug2/minimal)
+        # Mapeo ángulos sonares (como vuestro Bug2/minimal)
         self.sensor_angles_deg = {
             1: -90, 2: -50, 3: -30, 4: -10, 5: 10, 6: 30, 7: 50, 8: 90,
             9: 90, 10: 130, 11: 150, 12: 170, 13: -170, 14: -150, 15: -130, 16: -90
@@ -114,16 +129,16 @@ class LLMInputBridgeNode(Node):
                 10
             )
 
-        if self.include_map_snapshot:
+        if self.include_map:
             self.create_subscription(OccupancyGrid, '/map', self._map_cb, 10)
 
-        # Timer de publicación del input
+        # Timer publicación
         self.timer = self.create_timer(1.0 / max(self.publish_rate_hz, 0.1), self._tick)
 
         self.get_logger().info('LLMInputBridgeNode iniciado')
         self.get_logger().info(f'  publish_rate_hz={self.publish_rate_hz}')
         self.get_logger().info(f'  mock_mode={self.mock_mode} (latency={self.mock_latency_ms}ms)')
-        self.get_logger().info(f'  include_map_snapshot={self.include_map_snapshot}')
+        self.get_logger().info(f'  include_map={self.include_map} map_as_png={self.map_as_png} downsample={self.map_downsample}')
         self.get_logger().info('Publica: /llm/input_json y /llm/output_json')
 
     # =========================
@@ -142,7 +157,7 @@ class LLMInputBridgeNode(Node):
         self.map_msg = msg
 
     # =========================
-    # Construcción JSON input
+    # JSON input
     # =========================
     def _build_input_payload(self) -> Optional[Dict[str, Any]]:
         if self.pose is None or self.goal is None or len(self.sonars) < 4:
@@ -197,54 +212,102 @@ class LLMInputBridgeNode(Node):
             "world": {}
         }
 
-        if self.include_map_snapshot and self.map_msg is not None:
-            payload["world"]["map"] = self._map_snapshot(self.map_msg)
+        if self.include_map and self.map_msg is not None:
+            payload["world"]["map"] = self._map_payload(self.map_msg)
 
         return payload
 
-    def _map_snapshot(self, m: OccupancyGrid) -> Dict[str, Any]:
-        # Snapshot “ligero”: metadatos + rejilla downsampleada y truncada.
+    # =========================
+    # MAPA -> PNG BASE64
+    # =========================
+    def _map_payload(self, m: OccupancyGrid) -> Dict[str, Any]:
         w = int(m.info.width)
         h = int(m.info.height)
         res = float(m.info.resolution)
         ox = float(m.info.origin.position.x)
         oy = float(m.info.origin.position.y)
 
-        snap: Dict[str, Any] = {
-            "schema": "occupancy_grid_snapshot_v1",
+        out: Dict[str, Any] = {
+            "schema": "occupancy_grid_snapshot_v2",
             "resolution_m": res,
             "width": w,
             "height": h,
             "origin": {"x": ox, "y": oy},
-            "downsample": self.map_downsample,
-            "cells": None
+            "downsample": int(max(1, self.map_downsample)),
         }
 
-        try:
-            ds = max(1, int(self.map_downsample))
-            sampled = []
-            count = 0
-            for yy in range(0, h, ds):
-                row = []
-                for xx in range(0, w, ds):
-                    idx = yy * w + xx
-                    row.append(int(m.data[idx]))  # -1 unknown, 0 free, 100 occupied
-                sampled.append(row)
-                count += len(row)
-                if count >= self.map_max_cells:
-                    break
-            snap["cells"] = sampled
-        except Exception as e:
-            snap["cells"] = None
-            snap["error"] = str(e)
+        if not self.map_as_png:
+            # Si algún día quieres volver a “cells”, lo reintroduces aquí.
+            out["note"] = "map_as_png=false: no se incluye imagen"
+            return out
 
-        return snap
+        try:
+            ds = int(max(1, self.map_downsample))
+            grid = np.array(m.data, dtype=np.int16).reshape((h, w))
+
+            # Downsample por “submuestreo” simple (rápido): cada ds
+            grid_ds = grid[::ds, ::ds]
+
+            # Render a imagen 8-bit:
+            # -1 unknown -> gris
+            #  0 free    -> blanco
+            # 100 occ    -> negro
+            img = np.empty(grid_ds.shape, dtype=np.uint8)
+
+            unknown = (grid_ds < 0)
+            free = (grid_ds == 0)
+            occ = (grid_ds > 50)  # umbral para ocupado
+
+            img[unknown] = np.uint8(self.map_png_unknown)
+            img[free] = np.uint8(self.map_png_free)
+            img[occ] = np.uint8(self.map_png_occ)
+
+            # El resto (valores intermedios) los dejamos como “gris medio”
+            mid = ~(unknown | free | occ)
+            if np.any(mid):
+                img[mid] = np.uint8(200)
+
+            if self.map_png_flip_y:
+                img = np.flipud(img)
+
+            ok, buf = cv2.imencode('.png', img)
+            if not ok:
+                raise RuntimeError("cv2.imencode('.png') falló")
+
+            raw = buf.tobytes()
+            b64 = base64.b64encode(raw).decode('ascii')
+
+            # Control de tamaño (base64 crece ~33%)
+            if len(b64) > self.map_png_max_bytes:
+                out["png"] = {
+                    "mime": "image/png",
+                    "encoding": "base64",
+                    "data": None
+                }
+                out["warning"] = f"PNG base64 truncado por tamaño: {len(b64)} > map_png_max_bytes={self.map_png_max_bytes}"
+                out["png_bytes"] = int(len(raw))
+                out["png_b64_len"] = int(len(b64))
+                return out
+
+            out["png"] = {
+                "mime": "image/png",
+                "encoding": "base64",
+                "data": b64
+            }
+            out["png_bytes"] = int(len(raw))
+            out["png_b64_len"] = int(len(b64))
+            out["png_size"] = {"width": int(img.shape[1]), "height": int(img.shape[0])}
+
+            return out
+
+        except Exception as e:
+            out["error"] = str(e)
+            return out
 
     # =========================
     # Mock “LLM”
     # =========================
     def _mock_llm_response(self, input_payload: Dict[str, Any]) -> Dict[str, Any]:
-        # Heurística mínima para demo: si delante hay algo cerca, “gira”; si no, “avanza”.
         sonars = input_payload["sensors"]["sonars"]
 
         def _min_range(ids: List[int]) -> float:
