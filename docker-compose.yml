@@ -1,0 +1,44 @@
+version: '3.8'
+
+services:
+  ros2:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        # Pasar UID y GID desde .env
+        USER_UID: ${UID:-1000}
+        USER_GID: ${GID:-1000}
+        USERNAME: rosuser
+    image: mi_proyecto_ros2:latest
+    container_name: ros2_dev
+    stdin_open: true
+    tty: true
+    network_mode: host
+    volumes:
+      # Código fuente: bind mount
+      - ./src:/ros2_ws/src
+      - ./maps:/ros2_ws/maps
+
+      # Artefactos: volúmenes nombrados
+      - ros2_build:/ros2_ws/build
+      - ros2_install:/ros2_ws/install
+      - ros2_log:/ros2_ws/log
+      # GUI X11
+      - /tmp/.X11-unix:/tmp/.X11-unix:rw
+    environment:
+      - DISPLAY=${DISPLAY}
+      - ROS_DOMAIN_ID=0
+      - USER=rosuser
+      - HOME=/home/rosuser
+    # Opcional: límites de recursos
+    # deploy:
+    #   resources:
+    #     limits:
+    #       cpus: '4'
+    #       memory: 8G
+
+volumes:
+  ros2_build:
+  ros2_install:
+  ros2_log:
