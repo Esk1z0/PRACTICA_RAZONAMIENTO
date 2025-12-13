@@ -14,6 +14,8 @@ RUN apt-get update && apt-get install -y \
     python3-opencv \
     python3-skimage \
     python3-networkx \
+    python3-requests \
+    python3-pil \
     sudo \
     tree \
     vim \
@@ -26,7 +28,8 @@ RUN apt-get update && apt-get install -y \
 # DEPENDENCIAS PYTHON (pip)
 # ============================================
 RUN python3 -m pip install --no-cache-dir \
-    coppeliasim-zmqremoteapi-client
+    coppeliasim-zmqremoteapi-client \
+    openai
 
 # ============================================
 # CREAR USUARIO NO-ROOT ALINEADO CON EL HOST

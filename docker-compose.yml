@@ -11,7 +11,7 @@ services:
         USER_GID: ${GID:-1000}
         USERNAME: rosuser
     image: mi_proyecto_ros2:latest
-    container_name: ros2_dev
+    container_name: ros2_dev_2
     stdin_open: true
     tty: true
     network_mode: host

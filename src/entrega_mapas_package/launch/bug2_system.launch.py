@@ -124,6 +124,25 @@ def generate_launch_description():
         emulate_tty=True
     )
 
+    llm_input_bridge = Node(
+        package='entrega_mapas_package',
+        executable='llm_input_bridge_node',
+        name='llm_input_bridge',
+        output='screen',
+        parameters=[{
+            'publish_rate_hz': 2.0,
+            'mock_mode': True,
+            'mock_latency_ms': 150,
+            'include_map_snapshot': True,
+            'map_downsample': 8,
+            'map_max_cells': 4096,
+            'max_sonar_range': 5.0,
+            'robot_frame': 'world'
+        }],
+        emulate_tty=True
+    )
+
+
     return LaunchDescription([
         declare_robot_name,
         declare_control_rate,
@@ -136,4 +155,5 @@ def generate_launch_description():
         slam_toolbox,        # <- clave para /map y map->odom
         bug2_controller,
         goal_manager,
+        llm_input_bridge
     ])
