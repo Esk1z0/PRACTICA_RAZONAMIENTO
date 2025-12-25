@@ -134,7 +134,7 @@ def generate_launch_description():
             'mock_mode': True,
             'mock_latency_ms': 150,
             'include_map_snapshot': True,
-            'map_downsample': 8,
+            'map_downsample': 1,
             'map_max_cells': 4096,
             'max_sonar_range': 5.0,
             'robot_frame': 'world'
