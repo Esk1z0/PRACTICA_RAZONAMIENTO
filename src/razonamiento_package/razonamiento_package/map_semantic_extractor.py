@@ -50,7 +50,7 @@ OCC_MAX = 100
 FREE_THRESHOLD = 250
 OCC_THRESHOLD = 50
 MID_IS_UNKNOWN = True
-UNKNOWN_IS_OBSTACLE = False  # recomendado si quieres frontiers reales
+UNKNOWN_IS_OBSTACLE = False  
 
 # Limpieza máscara (sobre free_mask)
 OPEN_ITERS = 1
