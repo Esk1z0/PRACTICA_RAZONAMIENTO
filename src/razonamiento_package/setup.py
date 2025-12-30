@@ -62,6 +62,9 @@ setup(
             # ros2 run razonamiento_package json_dumper_node
             "json_dumper_node = razonamiento_package.json_dumper_node:main",
 
+            # ros2 run razonamiento_package llm_backend_node
+            "llm_backend_node = razonamiento_package.llm_backend_node:main"
+
         ],
     },
 )
