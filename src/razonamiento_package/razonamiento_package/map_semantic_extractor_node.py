@@ -78,6 +78,7 @@ class MapSemanticExtractorNode(Node):
             "resolution_m": grid.info.resolution,
             "origin_xy_m": (grid.info.origin.position.x, grid.info.origin.position.y),
             "frame_id": grid.header.frame_id,
+            "height": height,  # Guardamos altura para conversión correcta
         }
 
     def map_callback(self, msg: OccupancyGrid):
@@ -98,6 +99,7 @@ class MapSemanticExtractorNode(Node):
             resolution_m = masks["resolution_m"]
             origin_xy_m = masks["origin_xy_m"]
             frame_id = masks["frame_id"]
+            height = masks["height"]
             
             # Limpiar máscara libre
             free_clean = self.clean_mask(free_mask, open_iters=1, close_iters=2)
@@ -122,6 +124,7 @@ class MapSemanticExtractorNode(Node):
                 resolution_m=resolution_m,
                 origin_xy_m=origin_xy_m,
                 frame_id=frame_id,
+                height=height,
                 junction_degree=self.get_parameter('junction_degree').value,
                 include_endpoints=True
             )
@@ -279,10 +282,20 @@ class MapSemanticExtractorNode(Node):
         k = np.array([[1, 1, 1], [1, 0, 1], [1, 1, 1]], dtype=np.uint8)
         return cv2.filter2D(skel.astype(np.uint8), -1, k, borderType=cv2.BORDER_CONSTANT)
 
-    def cell_to_xy(self, cell: Tuple[int, int], resolution_m: float, origin_xy_m: Tuple[float, float]) -> Tuple[float, float]:
+    def cell_to_xy(self, cell: Tuple[int, int], resolution_m: float, origin_xy_m: Tuple[float, float], height: int) -> Tuple[float, float]:
+        """
+        Convierte coordenadas de celda (row, col) a coordenadas del mundo (x, y).
+        IMPORTANTE: Después de flipud(), row=0 está ARRIBA en la imagen numpy,
+        pero corresponde al Y MÁS ALTO en el mundo real.
+        """
         r, c = cell
         x0, y0 = origin_xy_m
-        return (x0 + c * resolution_m, y0 + r * resolution_m)
+        # X: directamente de columnas (sin cambio)
+        x = x0 + c * resolution_m
+        # Y: invertir porque row=0 (arriba en imagen) = y_max (arriba en mundo)
+        # Formula: y = y0 + (height - 1 - r) * resolution
+        y = y0 + (height - 1 - r) * resolution_m
+        return (x, y)
 
     def neighbors8(self, cell: Tuple[int, int], skeleton: np.ndarray) -> List[Tuple[int, int]]:
         h, w = skeleton.shape
@@ -309,17 +322,17 @@ class MapSemanticExtractorNode(Node):
     def node_id_map(self, node_cells: List[Tuple[int, int]], prefix: str = "n") -> Dict[Tuple[int, int], str]:
         return {cell: f"{prefix}{i}" for i, cell in enumerate(node_cells)}
 
-    def init_graph(self, frame_id: str, resolution_m: float, origin_xy_m: Tuple[float, float]) -> nx.Graph:
-        return nx.Graph(frame_id=frame_id, resolution_m=resolution_m, origin_xy_m=origin_xy_m)
+    def init_graph(self, frame_id: str, resolution_m: float, origin_xy_m: Tuple[float, float], height: int) -> nx.Graph:
+        return nx.Graph(frame_id=frame_id, resolution_m=resolution_m, origin_xy_m=origin_xy_m, height=height)
 
     def add_nodes_from_cells(self, g: nx.Graph, node_id: Dict[Tuple[int, int], str], deg: np.ndarray, 
-                            resolution_m: float, origin_xy_m: Tuple[float, float], junction_degree: int) -> None:
+                            resolution_m: float, origin_xy_m: Tuple[float, float], height: int, junction_degree: int) -> None:
         for cell, nid in node_id.items():
             d = int(deg[cell[0], cell[1]])
             g.add_node(
                 nid,
                 cell=cell,
-                xy_m=self.cell_to_xy(cell, resolution_m, origin_xy_m),
+                xy_m=self.cell_to_xy(cell, resolution_m, origin_xy_m, height),
                 type=("junction" if d >= junction_degree else "endpoint"),
                 labels={},
             )
@@ -363,15 +376,19 @@ class MapSemanticExtractorNode(Node):
                 g.add_edge(u, v, path_cells=path, labels={}, metrics={}, enabled=True)
 
     def skeleton_to_graph(self, skel: np.ndarray, resolution_m: float, origin_xy_m: Tuple[float, float] = (0.0, 0.0),
-                         frame_id: str = "map", junction_degree: int = 3, include_endpoints: bool = True) -> nx.Graph:
+                         frame_id: str = "map", height: int = 0, junction_degree: int = 3, include_endpoints: bool = True) -> nx.Graph:
         skeleton = skel.astype(bool)
         deg = self.skeleton_degree(skeleton)
+        
+        # Si no se proporciona height, usar la altura de la imagen
+        if height == 0:
+            height = skeleton.shape[0]
 
         nodes = self.skeleton_node_cells(skeleton=skeleton, deg=deg, junction_degree=junction_degree, include_endpoints=include_endpoints)
         nid = self.node_id_map(nodes)
 
-        g = self.init_graph(frame_id=frame_id, resolution_m=resolution_m, origin_xy_m=origin_xy_m)
-        self.add_nodes_from_cells(g=g, node_id=nid, deg=deg, resolution_m=resolution_m, origin_xy_m=origin_xy_m, junction_degree=junction_degree)
+        g = self.init_graph(frame_id=frame_id, resolution_m=resolution_m, origin_xy_m=origin_xy_m, height=height)
+        self.add_nodes_from_cells(g=g, node_id=nid, deg=deg, resolution_m=resolution_m, origin_xy_m=origin_xy_m, height=height, junction_degree=junction_degree)
         self.add_edges_from_skeleton(g=g, node_id=nid, skeleton=skeleton)
         return g
 
@@ -429,14 +446,13 @@ class MapSemanticExtractorNode(Node):
         res = float(g.graph.get("resolution_m", 1.0))
         origin = tuple(g.graph.get("origin_xy_m", (0.0, 0.0)))
         frame_id = g.graph.get("frame_id", "map")
+        height = int(g.graph.get("height", free_mask.shape[0]))
         min_clearance_cells = (min_clearance_m / res) if min_clearance_m > 0 else 0.0
 
         def xy(cell: Tuple[int, int]) -> Tuple[float, float]:
-            r, c = cell
-            x0, y0 = origin
-            return (x0 + c * res, y0 + r * res)
+            return self.cell_to_xy(cell, res, origin, height)
 
-        out = nx.Graph(frame_id=frame_id, resolution_m=res, origin_xy_m=origin)
+        out = nx.Graph(frame_id=frame_id, resolution_m=res, origin_xy_m=origin, height=height)
         for nid, nd in g.nodes(data=True):
             out.add_node(nid, **nd)
 
@@ -504,7 +520,8 @@ class MapSemanticExtractorNode(Node):
             # Recalcular xy_m con la nueva celda
             res = float(g.graph.get("resolution_m", 1.0))
             origin = tuple(g.graph.get("origin_xy_m", (0.0, 0.0)))
-            base["xy_m"] = self.cell_to_xy((r0, c0), res, origin)
+            height = int(g.graph.get("height", 0))
+            base["xy_m"] = self.cell_to_xy((r0, c0), res, origin, height)
             out.add_node(rep, **base)
 
             for n in nodes:
