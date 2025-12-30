@@ -100,9 +100,6 @@ def generate_launch_description():
         emulate_tty=True
     )
 
-
-
-
     goal_manager = Node(
         package='razonamiento_package',
         executable='goal_manager_node',
@@ -142,6 +139,49 @@ def generate_launch_description():
         emulate_tty=True
     )
 
+    map_semantic_extractor = Node(
+        package="razonamiento_package",   
+        executable="map_semantic_extractor_node",    
+        name="map_semantic_extractor",
+        output="screen",
+        parameters=[
+            {"map_topic": "/map"},
+            {"graph_topic": "/map_semantic/graph_json"},
+            {"frontiers_topic": "/map_semantic/frontiers_json"},
+        ],
+    )
+
+#dumper
+    topic_arg = DeclareLaunchArgument(
+        "topic",
+        default_value="/map_semantic/graph_json",
+        description="Topic std_msgs/String que contiene el JSON"
+    )
+
+    out_arg = DeclareLaunchArgument(
+        "out",
+        default_value="/ros2_ws/maps/map_snapshot.json",
+        description="Ruta del fichero JSON de salida"
+    )
+
+    mode_arg = DeclareLaunchArgument(
+        "mode",
+        default_value="last",
+        description="Modo de escritura: last | append"
+    )
+
+    json_dumper = Node(
+        package="razonamiento_package",   
+        executable="json_dumper_node",    
+        name="json_dumper",
+        output="screen",
+        parameters=[{
+            "topic": LaunchConfiguration("topic"),
+            "out": LaunchConfiguration("out"),
+            "mode": LaunchConfiguration("mode"),
+        }],
+    )
+
 
     return LaunchDescription([
         declare_robot_name,
@@ -155,5 +195,12 @@ def generate_launch_description():
         slam_toolbox,        # <- clave para /map y map->odom
         bug2_controller,
         goal_manager,
-        llm_input_bridge
+        llm_input_bridge,
+        map_semantic_extractor,
+
+        #dumper
+        topic_arg,
+        out_arg,
+        mode_arg,
+        json_dumper,
     ])

@@ -749,7 +749,7 @@ def build_frontiers_json_from_occupancy(
 # ROS 2 NODE
 # ============================================================
 
-class MapSemanticExtractor(Node):
+class MapSemanticExtractorNode(Node):
     """
     Nodo ROS2:
     - subscribe: OccupancyGrid
@@ -757,7 +757,7 @@ class MapSemanticExtractor(Node):
     """
 
     def __init__(self):
-        super().__init__("map_semantic_extractor")
+        super().__init__("map_semantic_extractor_node")
 
         self.declare_parameter("map_topic", MAP_TOPIC)
         self.declare_parameter("graph_topic", GRAPH_TOPIC)
@@ -837,7 +837,7 @@ def main(args=None) -> None:
     Entry point ROS2.
     """
     rclpy.init(args=args)
-    node = MapSemanticExtractor()
+    node = MapSemanticExtractorNode()
     try:
         rclpy.spin(node)
     finally:

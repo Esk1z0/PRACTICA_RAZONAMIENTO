@@ -50,12 +50,17 @@ setup(
             # ros2 run razonamiento_package goal_manager_node
             'goal_manager_node = razonamiento_package.goal_manager_node:main',
 
-            # ros2 run entrega_mapas_package occupancy_mapper_node
+            # ros2 run razonamiento_package occupancy_mapper_node
             'occupancy_mapper_node = razonamiento_package.occupancy_mapper_node:main',
 
-            # ros2 run entrega_mapas_package input_bridge_node
-            'llm_input_bridge_node = razonamiento_package.llm_input_bridge_node:main'
+            # ros2 run razonamiento_package input_bridge_node
+            'llm_input_bridge_node = razonamiento_package.llm_input_bridge_node:main',
+
+            # ros2 run razonamiento_package map_semantic_extractor_node
+            "map_semantic_extractor_node = razonamiento_package.map_semantic_extractor_node:main",
             
+            # ros2 run razonamiento_package json_dumper_node
+            "json_dumper_node = razonamiento_package.json_dumper_node:main",
 
         ],
     },
