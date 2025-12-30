@@ -606,11 +606,18 @@ class Bug2ControllerNode(Node):
     # ============= NUEVA: FEEDBACK =============
     
     def publish_feedback(self, message: str):
-        """Publica mensaje de feedback"""
+        """Publica mensaje de feedback con información del objetivo"""
+        # Añadir información del objetivo al mensaje
+        if self.goal_point is not None:
+            goal_str = f"[Goal: ({self.goal_point[0]:.2f}, {self.goal_point[1]:.2f})] "
+            full_message = goal_str + message
+        else:
+            full_message = "[Goal: None] " + message
+        
         msg = String()
-        msg.data = message
+        msg.data = full_message
         self.feedback_pub.publish(msg)
-        self.get_logger().info(f'FEEDBACK: {message}')
+        self.get_logger().info(f'FEEDBACK: {full_message}')
     
     def publish_periodic_feedback(self):
         """Publica feedback periódico con el estado actual"""
@@ -636,7 +643,7 @@ class Bug2ControllerNode(Node):
             f"Distance: {distance:.2f}m | "
             f"Traveled: {self.total_distance_traveled:.1f}m | "
             f"Time: {elapsed_time:.1f}s | "
-            f"State changes: {self.state_changes}"
+            f"Changes: {self.state_changes}"
         )
         
         self.publish_feedback(feedback_msg)
