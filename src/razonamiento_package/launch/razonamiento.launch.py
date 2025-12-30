@@ -147,9 +147,12 @@ def generate_launch_description():
         parameters=[{
             'free_threshold': 99,        # Umbral para espacio libre (0-100)
             'occ_threshold': 50,         # Umbral para obstáculos (0-100)
-            'min_clearance_m': 0.5,      # Clearance mínimo en metros
+            'min_clearance_m': 0.3,      # Clearance mínimo en metros
             'snap_radius_cells': 3,      # Radio para fusionar nodos cercanos
             'junction_degree': 3,        # Grado mínimo para considerar junction
+            'morph_open_iters': 0,       # 0 = no erosionar (preserva puertas)
+            'morph_close_iters': 1,      # 1 = cerrado suave (rellena huecos pequeños)
+            'morph_kernel_size': 3,      # Tamaño del kernel (3x3 píxeles)
         }],
         remappings=[
             ('/map', '/map'),  # Puedes cambiar el topic si es necesario

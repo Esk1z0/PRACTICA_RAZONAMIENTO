@@ -24,6 +24,9 @@ class MapSemanticExtractorNode(Node):
         self.declare_parameter('min_clearance_m', 0.3)
         self.declare_parameter('snap_radius_cells', 3)
         self.declare_parameter('junction_degree', 3)
+        self.declare_parameter('morph_open_iters', 0)   # Nuevo: limpieza open
+        self.declare_parameter('morph_close_iters', 1)  # Nuevo: limpieza close
+        self.declare_parameter('morph_kernel_size', 3)  # Nuevo: tamaño kernel
         
         # Suscriptor al mapa
         self.map_sub = self.create_subscription(
@@ -101,8 +104,13 @@ class MapSemanticExtractorNode(Node):
             frame_id = masks["frame_id"]
             height = masks["height"]
             
-            # Limpiar máscara libre
-            free_clean = self.clean_mask(free_mask, open_iters=1, close_iters=2)
+            # Limpiar máscara libre (ahora configurable)
+            free_clean = self.clean_mask(
+                free_mask,
+                open_iters=self.get_parameter('morph_open_iters').value,
+                close_iters=self.get_parameter('morph_close_iters').value,
+                kernel=self.get_parameter('morph_kernel_size').value
+            )
             free_clean = self.keep_largest_component(free_clean)
             
             # Calcular distancia de obstáculos
