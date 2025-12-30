@@ -83,19 +83,25 @@ def generate_launch_description():
             'max_linear_speed': 4.0,
             'max_angular_speed': 15.0,
             'wheel_separation': 0.33,
-
-
-            'goal_reached_tolerance': 0.8,           # antes goal_tolerance
-            'm_line_tolerance': 0.2,
-
-            'obstacle_threshold': 0.6,               # ajustable
-            'target_wall_distance': 0.75,            # antes wall_distance
-            'wall_distance_tolerance': 0.5,
-
-            'angular_gain': 2.0,
-            'forward_speed_ratio': 0.7,
-            'wall_follow_speed': 1.0,                # MUY importante (ver punto 2)
-            'debug_log_frequency': 200
+            
+            'm_line_tolerance': 0.3,
+            'goal_reached_tolerance': 0.8,
+            'obstacle_threshold': 0.4,
+            'target_wall_distance': 0.5,
+            'wall_distance_tolerance': 0.2,
+            
+            'angular_gain': 1.5,
+            'forward_speed_ratio': 0.8,
+            'wall_follow_speed': 1.4,
+            
+            'debug_log_frequency': 200,
+            
+            # === NUEVOS PARÁMETROS DE UNREACHABLE ===
+            'enable_unreachable_detection': True,
+            'max_distance_factor': 5.0,
+            'max_state_changes': 30,
+            'max_wall_follow_time': 45.0,
+            'feedback_rate_hz': 2.0,
         }],
         emulate_tty=True
     )

@@ -5,6 +5,7 @@ from rclpy.node import Node
 from rclpy.qos import QoSProfile, ReliabilityPolicy, DurabilityPolicy
 from geometry_msgs.msg import Twist, PoseStamped
 from sensor_msgs.msg import Range
+from std_msgs.msg import String
 import math
 
 
@@ -12,28 +13,32 @@ class Bug2ControllerNode(Node):
     def __init__(self):
         super().__init__('bug2_controller_node')
         
-        # ============= PARÁMETROS CONFIGURABLES =============
-        self.declare_parameter('max_linear_speed', 0.5)  # m/s
-        self.declare_parameter('max_angular_speed', 1.0)  # rad/s
-        self.declare_parameter('wheel_separation', 0.33)  # metros (ajustar según robot real)
-        self.declare_parameter('control_frequency', 20.0)  # Hz
+        # ============= PARÁMETROS CONFIGURABLES (ORIGINALES) =============
+        self.declare_parameter('max_linear_speed', 0.5)
+        self.declare_parameter('max_angular_speed', 1.0)
+        self.declare_parameter('wheel_separation', 0.33)
+        self.declare_parameter('control_frequency', 20.0)
         
-        # Parámetros Bug2
-        self.declare_parameter('m_line_tolerance', 0.3)  # tolerancia M-line (m)
-        self.declare_parameter('goal_reached_tolerance', 0.8)  # tolerancia meta (m)
-        self.declare_parameter('obstacle_threshold', 0.4)  # umbral detección obstáculo (m)
-        self.declare_parameter('target_wall_distance', 0.5)  # distancia objetivo a pared (m)
-        self.declare_parameter('wall_distance_tolerance', 0.2)  # tolerancia pared (m)
+        self.declare_parameter('m_line_tolerance', 0.3)
+        self.declare_parameter('goal_reached_tolerance', 0.8)
+        self.declare_parameter('obstacle_threshold', 0.4)
+        self.declare_parameter('target_wall_distance', 0.5)
+        self.declare_parameter('wall_distance_tolerance', 0.2)
         
-        # Parámetros de control
-        self.declare_parameter('angular_gain', 1.5)  # ganancia control angular
-        self.declare_parameter('forward_speed_ratio', 0.8)  # ratio velocidad adelante
-        self.declare_parameter('wall_follow_speed', 1.4)  # velocidad wall following
+        self.declare_parameter('angular_gain', 1.5)
+        self.declare_parameter('forward_speed_ratio', 0.8)
+        self.declare_parameter('wall_follow_speed', 1.4)
         
-        # Logging
-        self.declare_parameter('debug_log_frequency', 200)  # cada N iteraciones
+        self.declare_parameter('debug_log_frequency', 200)
         
-        # Obtener parámetros
+        # ============= NUEVOS PARÁMETROS DE UNREACHABLE =============
+        self.declare_parameter('enable_unreachable_detection', True)
+        self.declare_parameter('max_distance_factor', 5.0)
+        self.declare_parameter('max_state_changes', 30)
+        self.declare_parameter('max_wall_follow_time', 45.0)
+        self.declare_parameter('feedback_rate_hz', 2.0)
+        
+        # Obtener parámetros originales
         self.max_linear_speed = self.get_parameter('max_linear_speed').value
         self.max_angular_speed = self.get_parameter('max_angular_speed').value
         self.wheel_separation = self.get_parameter('wheel_separation').value
@@ -51,38 +56,44 @@ class Bug2ControllerNode(Node):
         
         self.debug_log_frequency = self.get_parameter('debug_log_frequency').value
         
-        # ============= ESTADOS BUG2 =============
+        # ============= ESTADOS BUG2 (ORIGINALES) =============
         self.MOTION_TO_GOAL = 0
         self.WALL_FOLLOWING = 1
+        self.REACHED = 2
+        self.UNREACHABLE = 3
         self.current_state = self.MOTION_TO_GOAL
         
-        # ============= VARIABLES BUG2 =============
-        self.start_point = None  # Punto inicial para M-line
-        self.goal_point = None  # Meta actual
-        self.hit_point = None  # Punto donde encontró obstáculo
-        self.hit_distance_to_goal = None  # Distancia a meta cuando hit
-        self.wall_following_side = 'right'  # Lado de seguimiento
+        # ============= VARIABLES BUG2 (ORIGINALES) =============
+        self.start_point = None
+        self.goal_point = None
+        self.hit_point = None
+        self.hit_distance_to_goal = None
+        self.wall_following_side = 'right'
         
-        # Estado actual del robot
         self.current_pose = None
         self.current_position = [0.0, 0.0]
         self.current_orientation = 0.0
         
-        # Lecturas de sonares (diccionario sensor_id -> distance)
         self.sonar_readings = {}
         self.num_sonars = 16
         
-        # Mapeo de ángulos de sensores (mismo que minimal.py)
         self.sensor_angles = {
             1: -90, 2: -50, 3: -30, 4: -10, 5: 10, 6: 30, 7: 50, 8: 90,
             9: 90, 10: 130, 11: 150, 12: 170, 13: -170, 14: -150, 15: -130, 16: -90
         }
         
-        # Contador de iteraciones
         self.iteration = 0
         
+        # ============= NUEVAS VARIABLES DE TRACKING =============
+        self.initial_distance_to_goal = None
+        self.total_distance_traveled = 0.0
+        self.last_position = None
+        self.state_changes = 0
+        self.last_bug2_state = self.MOTION_TO_GOAL
+        self.wall_follow_start_time = None
+        self.goal_start_time = None
+        
         # ============= QoS =============
-        # QoS para goal (TRANSIENT_LOCAL para recibir última meta)
         goal_qos = QoSProfile(
             reliability=ReliabilityPolicy.RELIABLE,
             durability=DurabilityPolicy.TRANSIENT_LOCAL,
@@ -91,6 +102,7 @@ class Bug2ControllerNode(Node):
         
         # ============= PUBLISHERS =============
         self.cmd_vel_pub = self.create_publisher(Twist, '/cmd_vel', 10)
+        self.feedback_pub = self.create_publisher(String, '/bug2/feedback', 10)
         
         # ============= SUBSCRIBERS =============
         self.pose_sub = self.create_subscription(
@@ -111,24 +123,38 @@ class Bug2ControllerNode(Node):
             )
             self.sonar_subs.append(sub)
         
-        # ============= TIMER DE CONTROL =============
+        # ============= TIMERS =============
         timer_period = 1.0 / self.control_frequency
         self.control_timer = self.create_timer(timer_period, self.control_loop)
         
-        self.get_logger().info('=== Bug2 Controller Node Iniciado ===')
+        self.feedback_timer = self.create_timer(
+            1.0 / self.get_parameter('feedback_rate_hz').value,
+            self.publish_periodic_feedback
+        )
+        
+        self.get_logger().info('=== Bug2 Controller Node Iniciado (Enhanced) ===')
         self.get_logger().info(f'Frecuencia de control: {self.control_frequency} Hz')
         self.get_logger().info(f'Velocidad máxima lineal: {self.max_linear_speed} m/s')
         self.get_logger().info(f'Velocidad máxima angular: {self.max_angular_speed} rad/s')
         self.get_logger().info(f'M-line tolerance: {self.m_line_tolerance} m')
         self.get_logger().info(f'Goal tolerance: {self.goal_reached_tolerance} m')
+        self.get_logger().info(f'Unreachable detection: {self.get_parameter("enable_unreachable_detection").value}')
         self.get_logger().info('Esperando pose, goal y sonares...')
     
     # ============= CALLBACKS =============
     
     def pose_callback(self, msg):
         """Callback de pose del robot"""
+        # Actualizar distancia recorrida para tracking de unreachable
+        if self.last_position is not None and self.current_state not in [self.REACHED, self.UNREACHABLE]:
+            dx = msg.pose.position.x - self.last_position[0]
+            dy = msg.pose.position.y - self.last_position[1]
+            distance_increment = math.sqrt(dx*dx + dy*dy)
+            self.total_distance_traveled += distance_increment
+        
         self.current_pose = msg
         self.current_position = [msg.pose.position.x, msg.pose.position.y]
+        self.last_position = self.current_position.copy()
         
         # Extraer yaw de quaternion
         qx = msg.pose.orientation.x
@@ -136,7 +162,6 @@ class Bug2ControllerNode(Node):
         qz = msg.pose.orientation.z
         qw = msg.pose.orientation.w
         
-        # Convertir quaternion a yaw
         siny_cosp = 2.0 * (qw * qz + qx * qy)
         cosy_cosp = 1.0 - 2.0 * (qy * qy + qz * qz)
         self.current_orientation = math.atan2(siny_cosp, cosy_cosp)
@@ -149,26 +174,36 @@ class Bug2ControllerNode(Node):
         if self.goal_point is None or new_goal != self.goal_point:
             self.goal_point = new_goal
             
-            # Establecer start_point para M-line
             if self.current_position is not None:
                 self.start_point = self.current_position.copy()
             
             # Resetear estado Bug2
             self.current_state = self.MOTION_TO_GOAL
+            self.last_bug2_state = self.MOTION_TO_GOAL
             self.hit_point = None
             self.hit_distance_to_goal = None
+            
+            # Resetear tracking de unreachable
+            self.initial_distance_to_goal = self.distance_to_goal(self.current_position)
+            self.total_distance_traveled = 0.0
+            self.state_changes = 0
+            self.wall_follow_start_time = None
+            self.goal_start_time = self.get_clock().now()
             
             self.get_logger().info('=' * 50)
             self.get_logger().info(f'NUEVA META RECIBIDA: ({new_goal[0]:.2f}, {new_goal[1]:.2f})')
             self.get_logger().info(f'Start point (M-line): ({self.start_point[0]:.2f}, {self.start_point[1]:.2f})')
+            self.get_logger().info(f'Distancia inicial: {self.initial_distance_to_goal:.2f} m')
             self.get_logger().info(f'Estado: MOTION_TO_GOAL')
             self.get_logger().info('=' * 50)
+            
+            self.publish_feedback("STARTED")
     
     def sonar_callback(self, msg, sensor_id):
         """Callback de sensores sonar"""
         self.sonar_readings[sensor_id] = msg.range
     
-    # ============= FUNCIONES AUXILIARES =============
+    # ============= FUNCIONES AUXILIARES (ORIGINALES) =============
     
     def distance_to_goal(self, position):
         """Calcula distancia euclidiana a la meta"""
@@ -189,7 +224,6 @@ class Bug2ControllerNode(Node):
         goal_angle = math.atan2(dy, dx)
         angle_diff = goal_angle - orientation
         
-        # Normalizar ángulo [-pi, pi]
         while angle_diff > math.pi:
             angle_diff -= 2 * math.pi
         while angle_diff < -math.pi:
@@ -206,12 +240,10 @@ class Bug2ControllerNode(Node):
         x2, y2 = self.goal_point
         x0, y0 = position
         
-        # Si start y goal son muy cercanos, considerar siempre en M-line
         line_length = math.sqrt((x2-x1)**2 + (y2-y1)**2)
         if line_length < 0.1:
             return True
         
-        # Distancia perpendicular del punto a la línea
         perpendicular_distance = abs((y2-y1)*x0 - (x2-x1)*y0 + x2*y1 - y2*x1) / line_length
         
         return perpendicular_distance <= self.m_line_tolerance
@@ -233,21 +265,18 @@ class Bug2ControllerNode(Node):
         if line_length < 0.1:
             return self.distance_to_goal(position)
         
-        # Proyección escalar
         projection = (point_vec[0] * line_vec[0] + point_vec[1] * line_vec[1]) / (line_length**2)
         
-        # Punto proyectado sobre la línea
         proj_x = x1 + projection * line_vec[0]
         proj_y = y1 + projection * line_vec[1]
         
-        # Distancia del punto proyectado a la meta
         return math.sqrt((x2 - proj_x)**2 + (y2 - proj_y)**2)
     
     def get_sonar_readings_dict(self):
         """Convierte lecturas de sonares a formato similar a minimal.py"""
         readings = {}
         for sensor_id in range(1, self.num_sonars + 1):
-            distance = self.sonar_readings.get(sensor_id, 1.5)  # Default 1.5 si no hay lectura
+            distance = self.sonar_readings.get(sensor_id, 1.5)
             readings[f'sonar_{sensor_id}'] = {
                 'distance': distance,
                 'angle': self.sensor_angles.get(sensor_id, 0),
@@ -260,14 +289,12 @@ class Bug2ControllerNode(Node):
         """Verifica si el camino directo a la meta está libre"""
         front_sensors = ['sonar_4', 'sonar_5']
         
-        # Verificar sensores frontales
         for sensor_name in front_sensors:
             if sensor_name in sensor_readings:
                 reading = sensor_readings[sensor_name]
                 if reading['valid'] and reading['distance'] < self.obstacle_threshold:
                     return False
         
-        # Verificar sensores en dirección de la meta
         for sensor_name, reading in sensor_readings.items():
             if not reading['valid']:
                 continue
@@ -278,7 +305,6 @@ class Bug2ControllerNode(Node):
             if angle_diff > math.pi:
                 angle_diff = 2 * math.pi - angle_diff
             
-            # Si el sensor apunta hacia la meta (±45 grados)
             if angle_diff < math.pi/4:
                 if reading['distance'] < self.obstacle_threshold:
                     return False
@@ -299,56 +325,104 @@ class Bug2ControllerNode(Node):
         
         return sum(distances) / len(distances) if distances else 0.0
     
-    # ============= COMPORTAMIENTOS BUG2 =============
+    # ============= NUEVA: DETECCIÓN DE UNREACHABLE =============
+    
+    def check_unreachable(self) -> bool:
+        """Verifica si el objetivo es inalcanzable según múltiples criterios"""
+        if not self.get_parameter('enable_unreachable_detection').value:
+            return False
+        
+        # Criterio 1: Distancia recorrida excesiva
+        if self.initial_distance_to_goal is not None and self.initial_distance_to_goal > 0:
+            distance_factor = self.total_distance_traveled / self.initial_distance_to_goal
+            max_factor = self.get_parameter('max_distance_factor').value
+            
+            if distance_factor > max_factor:
+                self.publish_feedback(
+                    f"UNREACHABLE: Distance factor {distance_factor:.2f} > {max_factor:.2f} "
+                    f"(traveled {self.total_distance_traveled:.1f}m, initial {self.initial_distance_to_goal:.1f}m)"
+                )
+                return True
+        
+        # Criterio 2: Demasiados cambios de estado
+        max_changes = self.get_parameter('max_state_changes').value
+        if self.state_changes > max_changes:
+            self.publish_feedback(
+                f"UNREACHABLE: Too many state changes ({self.state_changes} > {max_changes})"
+            )
+            return True
+        
+        # Criterio 3: Siguiendo pared por demasiado tiempo
+        if self.current_state == self.WALL_FOLLOWING and self.wall_follow_start_time is not None:
+            now = self.get_clock().now()
+            wall_follow_duration = (now - self.wall_follow_start_time).nanoseconds / 1e9
+            max_wall_time = self.get_parameter('max_wall_follow_time').value
+            
+            if wall_follow_duration > max_wall_time:
+                self.publish_feedback(
+                    f"UNREACHABLE: Wall following for {wall_follow_duration:.1f}s > {max_wall_time:.1f}s"
+                )
+                return True
+        
+        return False
+    
+    def track_state_change(self, new_state):
+        """Rastrea cambios de estado para detección de unreachable"""
+        if new_state != self.last_bug2_state:
+            self.state_changes += 1
+            
+            # Tracking de tiempo en WALL_FOLLOWING
+            if new_state == self.WALL_FOLLOWING:
+                self.wall_follow_start_time = self.get_clock().now()
+            elif self.last_bug2_state == self.WALL_FOLLOWING:
+                self.wall_follow_start_time = None
+            
+            self.last_bug2_state = new_state
+    
+    # ============= COMPORTAMIENTOS BUG2 (ORIGINALES CON TRACKING) =============
     
     def motion_to_goal_behavior(self, position, orientation, sensor_readings):
         """Comportamiento motion-to-goal"""
         angle_to_goal = self.angle_to_goal(position, orientation)
         
-        # Verificar si el camino está libre
         if self.is_path_to_goal_clear(sensor_readings, angle_to_goal):
-            # Moverse hacia la meta
             forward_speed = self.max_linear_speed * self.forward_speed_ratio
             angular_speed = angle_to_goal * self.angular_gain
             
-            # Convertir a velocidades de ruedas (aproximado)
             left_speed = forward_speed - (angular_speed * self.wheel_separation / 2.0)
             right_speed = forward_speed + (angular_speed * self.wheel_separation / 2.0)
             
             return left_speed, right_speed
         else:
-            # Obstáculo encontrado - cambiar a wall following
+            # Cambio de estado detectado
+            self.track_state_change(self.WALL_FOLLOWING)
             self.current_state = self.WALL_FOLLOWING
+            
             self.hit_point = position.copy()
             self.hit_distance_to_goal = self.distance_to_goal(position)
             
-            # Determinar lado de seguimiento
             left_clear = self.get_clearance_in_direction(sensor_readings, 'left')
             right_clear = self.get_clearance_in_direction(sensor_readings, 'right')
             self.wall_following_side = 'left' if left_clear > right_clear else 'right'
             
             self.get_logger().info('=' * 50)
-            self.get_logger().info('BUG2: OBSTÁCULO DETECTADO - Iniciando WALL_FOLLOWING')
+            self.get_logger().info(f'BUG2: OBSTÁCULO DETECTADO (cambio #{self.state_changes})')
             self.get_logger().info(f'Hit point: ({self.hit_point[0]:.2f}, {self.hit_point[1]:.2f})')
             self.get_logger().info(f'Distancia a meta en hit: {self.hit_distance_to_goal:.2f} m')
             self.get_logger().info(f'Lado de seguimiento: {self.wall_following_side.upper()}')
-            self.get_logger().info(f'Clearance izq: {left_clear:.2f}, der: {right_clear:.2f}')
             self.get_logger().info('=' * 50)
             
             return self.wall_following_behavior(position, orientation, sensor_readings)
     
     def can_leave_wall_following(self, position, orientation, sensor_readings):
         """Condiciones Bug2 para dejar wall following"""
-        # Condición 1: Debe estar en la M-line
         if not self.is_on_m_line(position):
             return False
         
-        # Condición 2: Debe estar más cerca de la meta que en el hit point
         current_distance = self.distance_along_m_line_to_goal(position)
         if current_distance >= self.hit_distance_to_goal:
             return False
         
-        # Condición 3: El camino directo a la meta debe estar libre
         angle_to_goal = self.angle_to_goal(position, orientation)
         if not self.is_path_to_goal_clear(sensor_readings, angle_to_goal):
             return False
@@ -357,23 +431,21 @@ class Bug2ControllerNode(Node):
     
     def wall_following_behavior(self, position, orientation, sensor_readings):
         """Comportamiento wall following"""
-        # Verificar condiciones de salida Bug2
         if self.can_leave_wall_following(position, orientation, sensor_readings):
+            # Cambio de estado detectado
+            self.track_state_change(self.MOTION_TO_GOAL)
             self.current_state = self.MOTION_TO_GOAL
             
             current_dist = self.distance_along_m_line_to_goal(position)
             
             self.get_logger().info('=' * 50)
-            self.get_logger().info('BUG2: DEJANDO WALL_FOLLOWING - Volviendo a MOTION_TO_GOAL')
-            self.get_logger().info(f'Posición actual: ({position[0]:.2f}, {position[1]:.2f})')
-            self.get_logger().info(f'En M-line: TRUE')
+            self.get_logger().info(f'BUG2: DEJANDO WALL_FOLLOWING (cambio #{self.state_changes})')
             self.get_logger().info(f'Distancia a meta: {current_dist:.2f} m (hit: {self.hit_distance_to_goal:.2f} m)')
             self.get_logger().info(f'Mejora: {self.hit_distance_to_goal - current_dist:.2f} m')
             self.get_logger().info('=' * 50)
             
             return self.motion_to_goal_behavior(position, orientation, sensor_readings)
         
-        # Continuar siguiendo la pared
         return self.wall_following_control(sensor_readings)
     
     def wall_following_control(self, sensor_readings):
@@ -385,7 +457,6 @@ class Bug2ControllerNode(Node):
             wall_sensors = ['sonar_1', 'sonar_2', 'sonar_3']
             front_sensors = ['sonar_4', 'sonar_5']
         
-        # Obtener distancias a la pared y al frente
         wall_distances = []
         for sensor in wall_sensors:
             if sensor in sensor_readings and sensor_readings[sensor]['valid']:
@@ -399,10 +470,8 @@ class Bug2ControllerNode(Node):
         avg_wall_distance = sum(wall_distances) / len(wall_distances) if wall_distances else 1.5
         min_front_distance = min(front_distances) if front_distances else 1.5
         
-        # Control de seguimiento de pared (velocidades de ruedas)
         base_speed = self.wall_follow_speed
         
-        # Obstáculo frontal - girar
         if min_front_distance < self.obstacle_threshold:
             if self.wall_following_side == 'right':
                 left_speed = -0.5
@@ -410,8 +479,6 @@ class Bug2ControllerNode(Node):
             else:
                 left_speed = base_speed
                 right_speed = -0.5
-        
-        # Muy cerca - alejarse
         elif avg_wall_distance < self.target_wall_distance - self.wall_distance_tolerance:
             if self.wall_following_side == 'right':
                 left_speed = base_speed * 0.6
@@ -419,8 +486,6 @@ class Bug2ControllerNode(Node):
             else:
                 left_speed = base_speed * 1.3
                 right_speed = base_speed * 0.6
-        
-        # Muy lejos - acercarse
         elif avg_wall_distance > self.target_wall_distance + self.wall_distance_tolerance:
             if self.wall_following_side == 'right':
                 left_speed = base_speed * 1.3
@@ -428,8 +493,6 @@ class Bug2ControllerNode(Node):
             else:
                 left_speed = base_speed * 0.6
                 right_speed = base_speed * 1.3
-        
-        # Distancia correcta - avanzar
         else:
             left_speed = base_speed
             right_speed = base_speed
@@ -438,11 +501,9 @@ class Bug2ControllerNode(Node):
     
     def wheel_speeds_to_twist(self, left_speed, right_speed):
         """Convierte velocidades de ruedas a Twist"""
-        # Aproximación cinemática diferencial
         linear_vel = (left_speed + right_speed) / 2.0
         angular_vel = (right_speed - left_speed) / self.wheel_separation
         
-        # Limitar velocidades
         linear_vel = max(-self.max_linear_speed, min(self.max_linear_speed, linear_vel))
         angular_vel = max(-self.max_angular_speed, min(self.max_angular_speed, angular_vel))
         
@@ -452,13 +513,12 @@ class Bug2ControllerNode(Node):
         
         return twist
     
-    # ============= LOOP DE CONTROL =============
+    # ============= LOOP DE CONTROL (ORIGINAL CON UNREACHABLE) =============
     
     def control_loop(self):
         """Loop principal de control Bug2"""
         self.iteration += 1
         
-        # Verificar que tenemos datos necesarios
         if self.current_pose is None:
             if self.iteration % 50 == 0:
                 self.get_logger().warn('Esperando pose del robot...')
@@ -474,7 +534,6 @@ class Bug2ControllerNode(Node):
                 self.get_logger().warn('Esperando lecturas de sonares...')
             return
         
-        # Obtener estado actual
         position = self.current_position
         orientation = self.current_orientation
         sensor_readings = self.get_sonar_readings_dict()
@@ -482,12 +541,30 @@ class Bug2ControllerNode(Node):
         # Verificar si se alcanzó la meta
         distance_to_goal = self.distance_to_goal(position)
         if distance_to_goal < self.goal_reached_tolerance:
-            self.get_logger().info('=' * 50)
-            self.get_logger().info(f'META ALCANZADA! Distancia: {distance_to_goal:.2f} m')
-            self.get_logger().info('Esperando nueva meta del goal_manager...')
-            self.get_logger().info('=' * 50)
+            if self.current_state != self.REACHED:
+                self.current_state = self.REACHED
+                
+                self.get_logger().info('=' * 50)
+                self.get_logger().info(f'META ALCANZADA! Distancia: {distance_to_goal:.2f} m')
+                self.get_logger().info('Esperando nueva meta...')
+                self.get_logger().info('=' * 50)
+                
+                self.publish_feedback(f"REACHED: d={distance_to_goal:.3f}m")
             
-            # Detener robot
+            stop_cmd = Twist()
+            self.cmd_vel_pub.publish(stop_cmd)
+            return
+        
+        # NUEVA: Verificar unreachable
+        if self.current_state not in [self.REACHED, self.UNREACHABLE]:
+            if self.check_unreachable():
+                self.current_state = self.UNREACHABLE
+                stop_cmd = Twist()
+                self.cmd_vel_pub.publish(stop_cmd)
+                return
+        
+        # Si ya está en UNREACHABLE, no hacer nada
+        if self.current_state == self.UNREACHABLE:
             stop_cmd = Twist()
             self.cmd_vel_pub.publish(stop_cmd)
             return
@@ -502,24 +579,67 @@ class Bug2ControllerNode(Node):
                 position, orientation, sensor_readings
             )
         
-        # Convertir a Twist y publicar
         cmd_vel = self.wheel_speeds_to_twist(left_speed, right_speed)
         self.cmd_vel_pub.publish(cmd_vel)
         
         # Debug periódico
         if self.iteration % self.debug_log_frequency == 0:
-            state_name = "MOTION_TO_GOAL" if self.current_state == self.MOTION_TO_GOAL else "WALL_FOLLOWING"
+            state_names = {
+                self.MOTION_TO_GOAL: "MOTION_TO_GOAL",
+                self.WALL_FOLLOWING: "WALL_FOLLOWING",
+                self.REACHED: "REACHED",
+                self.UNREACHABLE: "UNREACHABLE"
+            }
+            state_name = state_names.get(self.current_state, "UNKNOWN")
             on_m_line = self.is_on_m_line(position)
             
             self.get_logger().info('-' * 50)
             self.get_logger().info(f'Bug2 Status (iter {self.iteration}):')
             self.get_logger().info(f'  Estado: {state_name}')
             self.get_logger().info(f'  Posición: ({position[0]:.2f}, {position[1]:.2f})')
-            self.get_logger().info(f'  Meta: ({self.goal_point[0]:.2f}, {self.goal_point[1]:.2f})')
             self.get_logger().info(f'  Distancia a meta: {distance_to_goal:.2f} m')
+            self.get_logger().info(f'  Distancia recorrida: {self.total_distance_traveled:.2f} m')
+            self.get_logger().info(f'  Cambios de estado: {self.state_changes}')
             self.get_logger().info(f'  En M-line: {on_m_line}')
-            self.get_logger().info(f'  Cmd_vel: linear={cmd_vel.linear.x:.2f}, angular={cmd_vel.angular.z:.2f}')
             self.get_logger().info('-' * 50)
+    
+    # ============= NUEVA: FEEDBACK =============
+    
+    def publish_feedback(self, message: str):
+        """Publica mensaje de feedback"""
+        msg = String()
+        msg.data = message
+        self.feedback_pub.publish(msg)
+        self.get_logger().info(f'FEEDBACK: {message}')
+    
+    def publish_periodic_feedback(self):
+        """Publica feedback periódico con el estado actual"""
+        if self.current_state in [self.REACHED, self.UNREACHABLE] or self.goal_point is None:
+            return
+        
+        distance = self.distance_to_goal(self.current_position)
+        elapsed_time = 0.0
+        
+        if self.goal_start_time is not None:
+            elapsed_time = (self.get_clock().now() - self.goal_start_time).nanoseconds / 1e9
+        
+        state_names = {
+            self.MOTION_TO_GOAL: "MOTION_TO_GOAL",
+            self.WALL_FOLLOWING: "WALL_FOLLOWING",
+            self.REACHED: "REACHED",
+            self.UNREACHABLE: "UNREACHABLE"
+        }
+        state_name = state_names.get(self.current_state, "UNKNOWN")
+        
+        feedback_msg = (
+            f"STATE: {state_name} | "
+            f"Distance: {distance:.2f}m | "
+            f"Traveled: {self.total_distance_traveled:.1f}m | "
+            f"Time: {elapsed_time:.1f}s | "
+            f"State changes: {self.state_changes}"
+        )
+        
+        self.publish_feedback(feedback_msg)
 
 
 def main(args=None):
@@ -532,7 +652,6 @@ def main(args=None):
     except KeyboardInterrupt:
         node.get_logger().info('Deteniendo Bug2 Controller...')
     finally:
-        # Detener robot
         stop_cmd = Twist()
         node.cmd_vel_pub.publish(stop_cmd)
         
