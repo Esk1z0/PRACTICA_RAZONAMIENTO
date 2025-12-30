@@ -18,15 +18,23 @@ class MapSemanticExtractorNode(Node):
     def __init__(self):
         super().__init__('map_semantic_extractor_node')
         
-        # Parámetros
+        # Parámetros generales
         self.declare_parameter('free_threshold', 65)
         self.declare_parameter('occ_threshold', 25)
         self.declare_parameter('min_clearance_m', 0.3)
         self.declare_parameter('snap_radius_cells', 3)
         self.declare_parameter('junction_degree', 3)
-        self.declare_parameter('morph_open_iters', 0)   # Nuevo: limpieza open
-        self.declare_parameter('morph_close_iters', 1)  # Nuevo: limpieza close
-        self.declare_parameter('morph_kernel_size', 3)  # Nuevo: tamaño kernel
+        
+        # Parámetros de limpieza morfológica
+        self.declare_parameter('morph_open_iters', 0)
+        self.declare_parameter('morph_close_iters', 1)
+        self.declare_parameter('morph_kernel_size', 3)
+        
+        # Parámetros de frontiers
+        self.declare_parameter('enable_frontiers', True)
+        self.declare_parameter('frontier_min_size_cells', 20)
+        self.declare_parameter('frontier_connectivity', 8)
+        self.declare_parameter('frontier_use_8_connectivity', True)
         
         # Suscriptor al mapa
         self.map_sub = self.create_subscription(
@@ -38,9 +46,11 @@ class MapSemanticExtractorNode(Node):
         
         # Publishers para markers
         self.marker_pub = self.create_publisher(MarkerArray, '/topological_graph_markers', 10)
+        self.frontier_pub = self.create_publisher(MarkerArray, '/frontier_markers', 10)
         
         self.graph = None
         self.last_map_data = None
+        self.frontiers = []
         
         self.get_logger().info('Map Semantic Extractor Node iniciado')
 
@@ -151,6 +161,10 @@ class MapSemanticExtractorNode(Node):
                 f'Grafo generado: {graph.number_of_nodes()} nodos, {graph.number_of_edges()} aristas'
             )
             
+            # Detectar y procesar frontiers si está habilitado
+            if self.get_parameter('enable_frontiers').value:
+                self.detect_and_publish_frontiers(free_clean, unknown_mask, resolution_m, origin_xy_m, frame_id, height)
+            
             # Publicar markers
             self.publish_markers(graph, frame_id)
             
@@ -255,6 +269,149 @@ class MapSemanticExtractorNode(Node):
         
         self.marker_pub.publish(marker_array)
         self.get_logger().info(f'Publicados {len(marker_array.markers)} markers')
+
+    def detect_and_publish_frontiers(self, free_mask: np.ndarray, unknown_mask: np.ndarray,
+                                     resolution_m: float, origin_xy_m: Tuple[float, float], 
+                                     frame_id: str, height: int):
+        """Detecta frontiers, los clasifica y publica markers"""
+        try:
+            # Detectar frontiers
+            frontier_mask = self.frontier_mask(
+                free_mask,
+                unknown_mask,
+                connectivity8=self.get_parameter('frontier_use_8_connectivity').value
+            )
+            
+            # Clustering
+            frontiers = self.cluster_frontiers(
+                frontier_mask,
+                min_size_cells=self.get_parameter('frontier_min_size_cells').value,
+                connectivity=self.get_parameter('frontier_connectivity').value
+            )
+            
+            # Ranking por tamaño
+            frontiers = self.rank_frontiers_by_size(frontiers)
+            
+            self.frontiers = frontiers
+            
+            self.get_logger().info(f'Detectadas {len(frontiers)} frontiers')
+            
+            # Publicar markers
+            self.publish_frontier_markers(frontiers, resolution_m, origin_xy_m, frame_id, height)
+            
+        except Exception as e:
+            self.get_logger().error(f'Error detectando frontiers: {str(e)}')
+            import traceback
+            self.get_logger().error(traceback.format_exc())
+
+    def publish_frontier_markers(self, frontiers: List[Dict[str, Any]], resolution_m: float,
+                                origin_xy_m: Tuple[float, float], frame_id: str, height: int):
+        """Publica markers de visualización para frontiers"""
+        marker_array = MarkerArray()
+        
+        # Borrar markers anteriores
+        delete_marker = Marker()
+        delete_marker.action = Marker.DELETEALL
+        marker_array.markers.append(delete_marker)
+        
+        for idx, frontier in enumerate(frontiers):
+            # Convertir centroid de (row, col) a (x, y)
+            centroid_xy = self.cell_to_xy(frontier["centroid_rc"], resolution_m, origin_xy_m, height)
+            
+            # Marker de esfera para centroid
+            sphere_marker = Marker()
+            sphere_marker.header.frame_id = frame_id
+            sphere_marker.header.stamp = self.get_clock().now().to_msg()
+            sphere_marker.ns = "frontier_centroids"
+            sphere_marker.id = idx
+            sphere_marker.type = Marker.SPHERE
+            sphere_marker.action = Marker.ADD
+            
+            sphere_marker.pose.position.x = float(centroid_xy[0])
+            sphere_marker.pose.position.y = float(centroid_xy[1])
+            sphere_marker.pose.position.z = 0.0
+            sphere_marker.pose.orientation.w = 1.0
+            
+            # Tamaño según el tamaño del frontier (más grande = más importante)
+            size = min(0.5, 0.1 + frontier["size_cells"] / 500.0)
+            sphere_marker.scale.x = size
+            sphere_marker.scale.y = size
+            sphere_marker.scale.z = size
+            
+            # Color amarillo brillante para frontiers
+            sphere_marker.color.r = 1.0
+            sphere_marker.color.g = 1.0
+            sphere_marker.color.b = 0.0
+            sphere_marker.color.a = 0.9
+            
+            marker_array.markers.append(sphere_marker)
+            
+            # Marker de texto con información
+            text_marker = Marker()
+            text_marker.header.frame_id = frame_id
+            text_marker.header.stamp = self.get_clock().now().to_msg()
+            text_marker.ns = "frontier_labels"
+            text_marker.id = idx + 1000
+            text_marker.type = Marker.TEXT_VIEW_FACING
+            text_marker.action = Marker.ADD
+            
+            text_marker.pose.position.x = float(centroid_xy[0])
+            text_marker.pose.position.y = float(centroid_xy[1])
+            text_marker.pose.position.z = 0.4
+            text_marker.pose.orientation.w = 1.0
+            
+            text_marker.text = f"{frontier['id']}\n{frontier['size_cells']} cells"
+            text_marker.scale.z = 0.15
+            
+            text_marker.color.r = 1.0
+            text_marker.color.g = 1.0
+            text_marker.color.b = 1.0
+            text_marker.color.a = 1.0
+            
+            marker_array.markers.append(text_marker)
+        
+        self.frontier_pub.publish(marker_array)
+        self.get_logger().info(f'Publicados {len(frontiers)} frontier markers')
+
+    # ==================== FUNCIONES DE FRONTIERS ====================
+    
+    def frontier_mask(self, free: np.ndarray, unknown: np.ndarray, *, connectivity8: bool = True) -> np.ndarray:
+        """Detecta celdas libres adyacentes a celdas desconocidas"""
+        k = np.ones((3, 3), np.uint8) if connectivity8 else np.array([[0, 1, 0],
+                                                                      [1, 1, 1],
+                                                                      [0, 1, 0]], np.uint8)
+        unk_nb = cv2.dilate(unknown.astype(np.uint8), k, iterations=1) > 0
+        return free & unk_nb
+
+    def cluster_frontiers(self, frontier: np.ndarray, *, min_size_cells: int = 20, 
+                         connectivity: int = 8) -> List[Dict[str, Any]]:
+        """Agrupa pixels de frontier en clusters y extrae sus propiedades"""
+        x = (frontier.astype(np.uint8) * 255)
+        n, labels, stats, centroids = cv2.connectedComponentsWithStats(x, connectivity=connectivity)
+
+        out: List[Dict[str, Any]] = []
+        for i in range(1, n):
+            area = int(stats[i, cv2.CC_STAT_AREA])
+            if area < min_size_cells:
+                continue
+
+            cx, cy = centroids[i]  # (x=col, y=row)
+            top = int(stats[i, cv2.CC_STAT_TOP])
+            left = int(stats[i, cv2.CC_STAT_LEFT])
+            height = int(stats[i, cv2.CC_STAT_HEIGHT])
+            width = int(stats[i, cv2.CC_STAT_WIDTH])
+
+            out.append({
+                "id": f"f{i}",
+                "size_cells": area,
+                "centroid_rc": (int(round(cy)), int(round(cx))),
+                "bbox_rcwh": (top, left, height, width),
+            })
+        return out
+
+    def rank_frontiers_by_size(self, frontiers: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """Ordena frontiers por tamaño (mayor a menor)"""
+        return sorted(frontiers, key=lambda f: f["size_cells"], reverse=True)
 
     # ==================== FUNCIONES DE PROCESAMIENTO ====================
     # (Copiadas del documento original con ajustes mínimos)

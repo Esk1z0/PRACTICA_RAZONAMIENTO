@@ -153,6 +153,10 @@ def generate_launch_description():
             'morph_open_iters': 0,       # 0 = no erosionar (preserva puertas)
             'morph_close_iters': 1,      # 1 = cerrado suave (rellena huecos pequeños)
             'morph_kernel_size': 2,      # Tamaño del kernel (3x3 píxeles)
+            'enable_frontiers': True,              # Activar/desactivar detección de frontiers
+            'frontier_min_size_cells': 20,         # Tamaño mínimo de frontier (en celdas)
+            'frontier_connectivity': 8,            # Conectividad para clustering (4 u 8)
+            'frontier_use_8_connectivity': True,   # Usar 8-conectividad para dilatar unknown
         }],
         remappings=[
             ('/map', '/map'),  # Puedes cambiar el topic si es necesario
