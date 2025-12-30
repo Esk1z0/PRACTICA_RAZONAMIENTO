@@ -145,9 +145,9 @@ def generate_launch_description():
         name="map_semantic_extractor",
         output="screen",
         parameters=[{
-            'free_threshold': 65,        # Umbral para espacio libre (0-100)
-            'occ_threshold': 25,         # Umbral para obstáculos (0-100)
-            'min_clearance_m': 0.3,      # Clearance mínimo en metros
+            'free_threshold': 99,        # Umbral para espacio libre (0-100)
+            'occ_threshold': 50,         # Umbral para obstáculos (0-100)
+            'min_clearance_m': 0.5,      # Clearance mínimo en metros
             'snap_radius_cells': 3,      # Radio para fusionar nodos cercanos
             'junction_degree': 3,        # Grado mínimo para considerar junction
         }],
