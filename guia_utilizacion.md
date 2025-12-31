@@ -77,7 +77,7 @@ Dentro del contenedor:
 
 ## 6. Ejecución del sistema
 Lanzar todo el sistema (interfaz + SLAM + control):
-- `ros2 launch entrega_mapas_package <archivo>.launch.py`
+- `ros2 launch razonamiento_package razonamiento.launch.py`
 
 ---
 

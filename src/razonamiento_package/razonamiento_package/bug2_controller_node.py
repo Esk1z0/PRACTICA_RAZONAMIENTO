@@ -60,7 +60,6 @@ class Bug2ControllerNode(Node):
         self.MOTION_TO_GOAL = 0
         self.WALL_FOLLOWING = 1
         self.REACHED = 2
-        self.UNREACHABLE = 3
         self.current_state = self.MOTION_TO_GOAL
         
         # ============= VARIABLES BUG2 (ORIGINALES) =============
@@ -92,6 +91,7 @@ class Bug2ControllerNode(Node):
         self.last_bug2_state = self.MOTION_TO_GOAL
         self.wall_follow_start_time = None
         self.goal_start_time = None
+        self.unreachable_reported = False  # Flag para reportar solo una vez
         
         # ============= QoS =============
         goal_qos = QoSProfile(
@@ -146,7 +146,7 @@ class Bug2ControllerNode(Node):
     def pose_callback(self, msg):
         """Callback de pose del robot"""
         # Actualizar distancia recorrida para tracking de unreachable
-        if self.last_position is not None and self.current_state not in [self.REACHED, self.UNREACHABLE]:
+        if self.last_position is not None and self.current_state != self.REACHED:
             dx = msg.pose.position.x - self.last_position[0]
             dy = msg.pose.position.y - self.last_position[1]
             distance_increment = math.sqrt(dx*dx + dy*dy)
@@ -189,6 +189,7 @@ class Bug2ControllerNode(Node):
             self.state_changes = 0
             self.wall_follow_start_time = None
             self.goal_start_time = self.get_clock().now()
+            self.unreachable_reported = False  # Resetear flag
             
             self.get_logger().info('=' * 50)
             self.get_logger().info(f'NUEVA META RECIBIDA: ({new_goal[0]:.2f}, {new_goal[1]:.2f})')
@@ -327,10 +328,14 @@ class Bug2ControllerNode(Node):
     
     # ============= NUEVA: DETECCIÓN DE UNREACHABLE =============
     
-    def check_unreachable(self) -> bool:
-        """Verifica si el objetivo es inalcanzable según múltiples criterios"""
+    def check_unreachable(self) -> tuple:
+        """
+        Verifica si el objetivo es inalcanzable según múltiples criterios.
+        Retorna (is_unreachable: bool, reason: str)
+        NO detiene el robot, solo reporta.
+        """
         if not self.get_parameter('enable_unreachable_detection').value:
-            return False
+            return (False, "")
         
         # Criterio 1: Distancia recorrida excesiva
         if self.initial_distance_to_goal is not None and self.initial_distance_to_goal > 0:
@@ -338,19 +343,17 @@ class Bug2ControllerNode(Node):
             max_factor = self.get_parameter('max_distance_factor').value
             
             if distance_factor > max_factor:
-                self.publish_feedback(
+                reason = (
                     f"UNREACHABLE: Distance factor {distance_factor:.2f} > {max_factor:.2f} "
                     f"(traveled {self.total_distance_traveled:.1f}m, initial {self.initial_distance_to_goal:.1f}m)"
                 )
-                return True
+                return (True, reason)
         
         # Criterio 2: Demasiados cambios de estado
         max_changes = self.get_parameter('max_state_changes').value
         if self.state_changes > max_changes:
-            self.publish_feedback(
-                f"UNREACHABLE: Too many state changes ({self.state_changes} > {max_changes})"
-            )
-            return True
+            reason = f"UNREACHABLE: Too many state changes ({self.state_changes} > {max_changes})"
+            return (True, reason)
         
         # Criterio 3: Siguiendo pared por demasiado tiempo
         if self.current_state == self.WALL_FOLLOWING and self.wall_follow_start_time is not None:
@@ -359,12 +362,10 @@ class Bug2ControllerNode(Node):
             max_wall_time = self.get_parameter('max_wall_follow_time').value
             
             if wall_follow_duration > max_wall_time:
-                self.publish_feedback(
-                    f"UNREACHABLE: Wall following for {wall_follow_duration:.1f}s > {max_wall_time:.1f}s"
-                )
-                return True
+                reason = f"UNREACHABLE: Wall following for {wall_follow_duration:.1f}s > {max_wall_time:.1f}s"
+                return (True, reason)
         
-        return False
+        return (False, "")
     
     def track_state_change(self, new_state):
         """Rastrea cambios de estado para detección de unreachable"""
@@ -555,21 +556,17 @@ class Bug2ControllerNode(Node):
             self.cmd_vel_pub.publish(stop_cmd)
             return
         
-        # NUEVA: Verificar unreachable
-        if self.current_state not in [self.REACHED, self.UNREACHABLE]:
-            if self.check_unreachable():
-                self.current_state = self.UNREACHABLE
-                stop_cmd = Twist()
-                self.cmd_vel_pub.publish(stop_cmd)
-                return
+        # NUEVO: Verificar unreachable PERO NO DETENER
+        # Solo reportar una vez por objetivo
+        if not self.unreachable_reported:
+            is_unreachable, reason = self.check_unreachable()
+            if is_unreachable:
+                self.unreachable_reported = True
+                self.publish_feedback(reason)
+                self.get_logger().warn('⚠ ' + reason)
+                self.get_logger().warn('⚠ Continuando navegación (esperando cambio de objetivo)...')
         
-        # Si ya está en UNREACHABLE, no hacer nada
-        if self.current_state == self.UNREACHABLE:
-            stop_cmd = Twist()
-            self.cmd_vel_pub.publish(stop_cmd)
-            return
-        
-        # Ejecutar comportamiento según estado Bug2
+        # Ejecutar comportamiento según estado Bug2 (CONTINÚA NORMALMENTE)
         if self.current_state == self.MOTION_TO_GOAL:
             left_speed, right_speed = self.motion_to_goal_behavior(
                 position, orientation, sensor_readings
@@ -587,8 +584,7 @@ class Bug2ControllerNode(Node):
             state_names = {
                 self.MOTION_TO_GOAL: "MOTION_TO_GOAL",
                 self.WALL_FOLLOWING: "WALL_FOLLOWING",
-                self.REACHED: "REACHED",
-                self.UNREACHABLE: "UNREACHABLE"
+                self.REACHED: "REACHED"
             }
             state_name = state_names.get(self.current_state, "UNKNOWN")
             on_m_line = self.is_on_m_line(position)
@@ -601,6 +597,8 @@ class Bug2ControllerNode(Node):
             self.get_logger().info(f'  Distancia recorrida: {self.total_distance_traveled:.2f} m')
             self.get_logger().info(f'  Cambios de estado: {self.state_changes}')
             self.get_logger().info(f'  En M-line: {on_m_line}')
+            if self.unreachable_reported:
+                self.get_logger().info(f'  Unreachable: REPORTADO')
             self.get_logger().info('-' * 50)
     
     # ============= NUEVA: FEEDBACK =============
@@ -621,7 +619,7 @@ class Bug2ControllerNode(Node):
     
     def publish_periodic_feedback(self):
         """Publica feedback periódico con el estado actual"""
-        if self.current_state in [self.REACHED, self.UNREACHABLE] or self.goal_point is None:
+        if self.current_state == self.REACHED or self.goal_point is None:
             return
         
         distance = self.distance_to_goal(self.current_position)
@@ -633,13 +631,15 @@ class Bug2ControllerNode(Node):
         state_names = {
             self.MOTION_TO_GOAL: "MOTION_TO_GOAL",
             self.WALL_FOLLOWING: "WALL_FOLLOWING",
-            self.REACHED: "REACHED",
-            self.UNREACHABLE: "UNREACHABLE"
+            self.REACHED: "REACHED"
         }
         state_name = state_names.get(self.current_state, "UNKNOWN")
         
+        # Añadir indicador si ya se reportó unreachable
+        status_suffix = " (UNREACHABLE)" if self.unreachable_reported else ""
+        
         feedback_msg = (
-            f"STATE: {state_name} | "
+            f"STATE: {state_name}{status_suffix} | "
             f"Distance: {distance:.2f}m | "
             f"Traveled: {self.total_distance_traveled:.1f}m | "
             f"Time: {elapsed_time:.1f}s | "
