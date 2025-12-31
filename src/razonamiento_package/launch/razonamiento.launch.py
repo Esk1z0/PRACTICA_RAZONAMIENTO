@@ -35,6 +35,11 @@ def generate_launch_description():
 
     slam_params_file = LaunchConfiguration('slam_params_file')
 
+    declare_zones_file = DeclareLaunchArgument(
+        'zones_file',
+        default_value="/ros2_ws/src/razonamiento_package/config/zones.yaml"
+    )
+
     coppelia_interface = Node(
         package='razonamiento_package',
         executable='coppelia_interface_node',
@@ -163,6 +168,8 @@ def generate_launch_description():
             'frontier_min_size_cells': 20,         # Tamaño mínimo de frontier (en celdas)
             'frontier_connectivity': 8,            # Conectividad para clustering (4 u 8)
             'frontier_use_8_connectivity': True,   # Usar 8-conectividad para dilatar unknown
+            'zones_file': LaunchConfiguration('zones_file'),
+            'default_zone_name': 'unknown',
         }],
         remappings=[
             ('/map', '/map'),  # Puedes cambiar el topic si es necesario
@@ -207,6 +214,7 @@ def generate_launch_description():
         declare_auto_goals,
         declare_laser_x, declare_laser_y, declare_laser_z, declare_laser_yaw,
         declare_slam_params,
+        declare_zones_file,
 
         coppelia_interface,
         laser_static_tf,

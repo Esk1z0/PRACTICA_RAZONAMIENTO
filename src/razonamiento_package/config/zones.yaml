@@ -1,0 +1,30 @@
+zones:
+  - name: "salon"
+    x1: -2.0
+    y1: -2.0
+    x2: 2.0
+    y2: 2.0
+    
+  - name: "cocina"
+    x1: 2.0
+    y1: -2.0
+    x2: 6.0
+    y2: 2.0
+    
+  - name: "pasillo"
+    x1: -2.0
+    y1: 2.0
+    x2: 2.0
+    y2: 6.0
+    
+  - name: "habitacion"
+    x1: 2.0
+    y1: 2.0
+    x2: 6.0
+    y2: 6.0
+    
+  - name: "bano"
+    x1: -2.0
+    y1: 6.0
+    x2: 0.0
+    y2: 8.0

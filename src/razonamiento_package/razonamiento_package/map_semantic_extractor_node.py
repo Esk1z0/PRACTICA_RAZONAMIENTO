@@ -36,6 +36,10 @@ class MapSemanticExtractorNode(Node):
         self.declare_parameter('frontier_connectivity', 8)
         self.declare_parameter('frontier_use_8_connectivity', True)
         
+        # Parámetros de zonas semánticas
+        self.declare_parameter('zones_file', '')  # Ruta al archivo YAML de zonas
+        self.declare_parameter('default_zone_name', 'unknown')  # Nombre para nodos sin zona
+        
         # Suscriptor al mapa
         self.map_sub = self.create_subscription(
             OccupancyGrid,
@@ -47,10 +51,12 @@ class MapSemanticExtractorNode(Node):
         # Publishers para markers
         self.marker_pub = self.create_publisher(MarkerArray, '/topological_graph_markers', 10)
         self.frontier_pub = self.create_publisher(MarkerArray, '/frontier_markers', 10)
+        self.zone_pub = self.create_publisher(MarkerArray, '/zone_markers', 10)
         
         self.graph = None
         self.last_map_data = None
         self.frontiers = []
+        self.zones = []  # Lista de zonas parseadas
         
         self.get_logger().info('Map Semantic Extractor Node iniciado')
 
@@ -98,6 +104,9 @@ class MapSemanticExtractorNode(Node):
         """Callback cuando llega un nuevo mapa"""
         try:
             self.get_logger().info('Procesando nuevo mapa...')
+            
+            # Parsear zonas desde parámetros
+            self.parse_zones()
             
             # Convertir a máscaras
             masks = self.occupancy_grid_to_masks(
@@ -154,6 +163,9 @@ class MapSemanticExtractorNode(Node):
             snap_radius = self.get_parameter('snap_radius_cells').value
             graph = self.snap_merge_nodes(graph, snap_radius_cells=snap_radius)
             
+            # Renombrar nodos según zonas semánticas
+            graph = self.rename_nodes_by_zones(graph, resolution_m, origin_xy_m, height)
+            
             self.graph = graph
             self.last_map_data = masks
             
@@ -165,7 +177,10 @@ class MapSemanticExtractorNode(Node):
             if self.get_parameter('enable_frontiers').value:
                 self.detect_and_publish_frontiers(free_clean, unknown_mask, resolution_m, origin_xy_m, frame_id, height)
             
-            # Publicar markers
+            # Publicar markers de zonas
+            self.publish_zone_markers(frame_id)
+            
+            # Publicar markers del grafo
             self.publish_markers(graph, frame_id)
             
         except Exception as e:
@@ -412,6 +427,238 @@ class MapSemanticExtractorNode(Node):
     def rank_frontiers_by_size(self, frontiers: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """Ordena frontiers por tamaño (mayor a menor)"""
         return sorted(frontiers, key=lambda f: f["size_cells"], reverse=True)
+
+    # ==================== ZONAS SEMÁNTICAS ====================
+    
+    def parse_zones(self):
+        """Parsea zonas desde archivo YAML"""
+        zones_file = self.get_parameter('zones_file').value
+        self.zones = []
+        
+        if not zones_file or zones_file == '':
+            self.get_logger().info('No hay archivo de zonas definido')
+            return
+        
+        try:
+            import yaml
+            with open(zones_file, 'r') as f:
+                zones_config = yaml.safe_load(f)
+            
+            if not zones_config or 'zones' not in zones_config:
+                self.get_logger().warn(f'Archivo de zonas sin sección "zones": {zones_file}')
+                return
+            
+            for zone_data in zones_config['zones']:
+                if not all(k in zone_data for k in ['name', 'x1', 'y1', 'x2', 'y2']):
+                    self.get_logger().warn(f'Zona inválida (faltan campos): {zone_data}')
+                    continue
+                
+                x1 = float(zone_data['x1'])
+                y1 = float(zone_data['y1'])
+                x2 = float(zone_data['x2'])
+                y2 = float(zone_data['y2'])
+                name = str(zone_data['name'])
+                
+                # Asegurar que x1 < x2 y y1 < y2
+                min_x = min(x1, x2)
+                max_x = max(x1, x2)
+                min_y = min(y1, y2)
+                max_y = max(y1, y2)
+                
+                zone = {
+                    'name': name,
+                    'min_x': min_x,
+                    'max_x': max_x,
+                    'min_y': min_y,
+                    'max_y': max_y
+                }
+                
+                self.zones.append(zone)
+                self.get_logger().info(
+                    f'Zona cargada: "{name}" - '
+                    f'[{min_x:.2f}, {min_y:.2f}] a [{max_x:.2f}, {max_y:.2f}]'
+                )
+            
+            self.get_logger().info(f'Total de zonas cargadas: {len(self.zones)}')
+            
+        except FileNotFoundError:
+            self.get_logger().error(f'Archivo de zonas no encontrado: {zones_file}')
+        except yaml.YAMLError as e:
+            self.get_logger().error(f'Error parseando YAML: {e}')
+        except Exception as e:
+            self.get_logger().error(f'Error cargando zonas: {e}')
+            import traceback
+            self.get_logger().error(traceback.format_exc())
+    
+    def get_zone_for_position(self, x: float, y: float) -> str:
+        """Determina en qué zona está una posición (x, y)"""
+        for zone in self.zones:
+            if (zone['min_x'] <= x <= zone['max_x'] and 
+                zone['min_y'] <= y <= zone['max_y']):
+                return zone['name']
+        
+        # Si no está en ninguna zona, retornar zona por defecto
+        return self.get_parameter('default_zone_name').value
+    
+    def rename_nodes_by_zones(self, g: nx.Graph, resolution_m: float, 
+                              origin_xy_m: Tuple[float, float], height: int) -> nx.Graph:
+        """Renombra nodos del grafo según las zonas semánticas"""
+        if not self.zones:
+            self.get_logger().info('Sin zonas definidas - manteniendo nombres originales')
+            return g
+        
+        # Crear nuevo grafo con los mismos atributos
+        new_graph = nx.Graph(**g.graph)
+        
+        # Contar nodos por zona para numeración
+        zone_counters = {}
+        
+        # Mapeo de nombres antiguos a nuevos
+        old_to_new = {}
+        
+        # Primera pasada: asignar nuevos nombres
+        for old_id, data in g.nodes(data=True):
+            x, y = data['xy_m']
+            zone_name = self.get_zone_for_position(x, y)
+            
+            # Incrementar contador de esta zona
+            if zone_name not in zone_counters:
+                zone_counters[zone_name] = 0
+            
+            new_id = f"{zone_name}_{zone_counters[zone_name]}"
+            zone_counters[zone_name] += 1
+            
+            old_to_new[old_id] = new_id
+            
+            # Añadir nodo con nuevo nombre
+            new_data = dict(data)
+            new_data['zone'] = zone_name
+            new_data['old_id'] = old_id
+            new_graph.add_node(new_id, **new_data)
+        
+        # Segunda pasada: copiar aristas con nuevos nombres
+        for u, v, edge_data in g.edges(data=True):
+            new_u = old_to_new[u]
+            new_v = old_to_new[v]
+            new_graph.add_edge(new_u, new_v, **edge_data)
+        
+        # Log resumen
+        self.get_logger().info('Nodos renombrados por zonas:')
+        for zone, count in zone_counters.items():
+            self.get_logger().info(f'  {zone}: {count} nodos')
+        
+        return new_graph
+    
+    def publish_zone_markers(self, frame_id: str):
+        """Publica markers de visualización para las zonas"""
+        if not self.zones:
+            return
+        
+        marker_array = MarkerArray()
+        
+        # Borrar markers anteriores
+        delete_marker = Marker()
+        delete_marker.action = Marker.DELETEALL
+        marker_array.markers.append(delete_marker)
+        
+        for idx, zone in enumerate(self.zones):
+            # Marker de rectángulo (CUBE)
+            cube_marker = Marker()
+            cube_marker.header.frame_id = frame_id
+            cube_marker.header.stamp = self.get_clock().now().to_msg()
+            cube_marker.ns = "zone_rectangles"
+            cube_marker.id = idx
+            cube_marker.type = Marker.CUBE
+            cube_marker.action = Marker.ADD
+            
+            # Posición en el centro del rectángulo
+            center_x = (zone['min_x'] + zone['max_x']) / 2.0
+            center_y = (zone['min_y'] + zone['max_y']) / 2.0
+            cube_marker.pose.position.x = center_x
+            cube_marker.pose.position.y = center_y
+            cube_marker.pose.position.z = 0.0
+            cube_marker.pose.orientation.w = 1.0
+            
+            # Tamaño del rectángulo
+            width = zone['max_x'] - zone['min_x']
+            height = zone['max_y'] - zone['min_y']
+            cube_marker.scale.x = width
+            cube_marker.scale.y = height
+            cube_marker.scale.z = 0.05  # Altura visual pequeña
+            
+            # Color semitransparente (diferente para cada zona)
+            # Generar color basado en hash del nombre
+            import hashlib
+            hash_val = int(hashlib.md5(zone['name'].encode()).hexdigest()[:6], 16)
+            cube_marker.color.r = ((hash_val >> 16) & 0xFF) / 255.0
+            cube_marker.color.g = ((hash_val >> 8) & 0xFF) / 255.0
+            cube_marker.color.b = (hash_val & 0xFF) / 255.0
+            cube_marker.color.a = 0.2  # Transparencia
+            
+            marker_array.markers.append(cube_marker)
+            
+            # Marker de borde (LINE_STRIP)
+            line_marker = Marker()
+            line_marker.header.frame_id = frame_id
+            line_marker.header.stamp = self.get_clock().now().to_msg()
+            line_marker.ns = "zone_borders"
+            line_marker.id = idx + 1000
+            line_marker.type = Marker.LINE_STRIP
+            line_marker.action = Marker.ADD
+            
+            line_marker.scale.x = 0.05  # Grosor de línea
+            line_marker.pose.orientation.w = 1.0
+            
+            # Mismo color pero opaco
+            line_marker.color.r = cube_marker.color.r
+            line_marker.color.g = cube_marker.color.g
+            line_marker.color.b = cube_marker.color.b
+            line_marker.color.a = 0.8
+            
+            # Puntos del rectángulo (5 puntos para cerrar)
+            corners = [
+                (zone['min_x'], zone['min_y']),
+                (zone['max_x'], zone['min_y']),
+                (zone['max_x'], zone['max_y']),
+                (zone['min_x'], zone['max_y']),
+                (zone['min_x'], zone['min_y'])  # Volver al inicio
+            ]
+            
+            for corner_x, corner_y in corners:
+                p = Point()
+                p.x = float(corner_x)
+                p.y = float(corner_y)
+                p.z = 0.1  # Ligeramente elevado
+                line_marker.points.append(p)
+            
+            marker_array.markers.append(line_marker)
+            
+            # Marker de texto con nombre de zona
+            text_marker = Marker()
+            text_marker.header.frame_id = frame_id
+            text_marker.header.stamp = self.get_clock().now().to_msg()
+            text_marker.ns = "zone_labels"
+            text_marker.id = idx + 2000
+            text_marker.type = Marker.TEXT_VIEW_FACING
+            text_marker.action = Marker.ADD
+            
+            text_marker.pose.position.x = center_x
+            text_marker.pose.position.y = center_y
+            text_marker.pose.position.z = 0.5  # Elevado para visibilidad
+            text_marker.pose.orientation.w = 1.0
+            
+            text_marker.text = zone['name']
+            text_marker.scale.z = 0.3  # Tamaño del texto
+            
+            text_marker.color.r = 1.0
+            text_marker.color.g = 1.0
+            text_marker.color.b = 1.0
+            text_marker.color.a = 1.0
+            
+            marker_array.markers.append(text_marker)
+        
+        self.zone_pub.publish(marker_array)
+        self.get_logger().info(f'Publicados {len(self.zones)} zone markers')
 
     # ==================== FUNCIONES DE PROCESAMIENTO ====================
     # (Copiadas del documento original con ajustes mínimos)
