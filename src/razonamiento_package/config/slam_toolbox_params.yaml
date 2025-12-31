@@ -12,4 +12,4 @@ slam_toolbox:
     resolution: 0.08
     max_laser_range: 5.0
     minimum_time_interval: 0.0
-    transform_publish_period: 0.02
+    transform_publish_period: 0.1

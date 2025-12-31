@@ -132,24 +132,6 @@ def generate_launch_description():
         emulate_tty=True
     )
 
-    llm_input_bridge = Node(
-        package='razonamiento_package',
-        executable='llm_input_bridge_node',
-        name='llm_input_bridge',
-        output='screen',
-        parameters=[{
-            'publish_rate_hz': 2.0,
-            'mock_mode': True,
-            'mock_latency_ms': 150,
-            'include_map_snapshot': True,
-            'map_downsample': 1,
-            'map_max_cells': 4096,
-            'max_sonar_range': 5.0,
-            'robot_frame': 'world'
-        }],
-        emulate_tty=True
-    )
-
     map_semantic_extractor = Node(
         package="razonamiento_package",   
         executable="map_semantic_extractor_node",    
@@ -176,36 +158,20 @@ def generate_launch_description():
         ]
     )
 
-#dumper
-    topic_arg = DeclareLaunchArgument(
-        "topic",
-        default_value="/map_semantic/graph_json",
-        description="Topic std_msgs/String que contiene el JSON"
-    )
-
-    out_arg = DeclareLaunchArgument(
-        "out",
-        default_value="/ros2_ws/maps/map_snapshot.json",
-        description="Ruta del fichero JSON de salida"
-    )
-
-    mode_arg = DeclareLaunchArgument(
-        "mode",
-        default_value="last",
-        description="Modo de escritura: last | append"
-    )
-
-    json_dumper = Node(
-        package="razonamiento_package",   
-        executable="json_dumper_node",    
-        name="json_dumper",
-        output="screen",
+    llm_state_builder = Node(
+        package="razonamiento_package",  
+        executable='llm_state_builder_node',
+        name='llm_state_builder',
+        output='screen',
         parameters=[{
-            "topic": LaunchConfiguration("topic"),
-            "out": LaunchConfiguration("out"),
-            "mode": LaunchConfiguration("mode"),
-        }],
+            'compact_precision': 2,          # Decimales para floats
+            'include_covariance': False,     # Incluir covarianza de pose
+            'max_frontiers': 5,              # Máximo número de frontiers
+            'max_graph_nodes': 20,           # Máximo número de nodos del grafo
+            'sonar_threshold': 1.5,          # Distancia máxima relevante (m)
+        }]
     )
+
 
 
     return LaunchDescription([
@@ -221,12 +187,7 @@ def generate_launch_description():
         slam_toolbox,        # <- clave para /map y map->odom
         bug2_controller,
         goal_manager,
-        llm_input_bridge,
         map_semantic_extractor,
+        llm_state_builder
 
-        #dumper
-        topic_arg,
-        out_arg,
-        mode_arg,
-        json_dumper,
     ])

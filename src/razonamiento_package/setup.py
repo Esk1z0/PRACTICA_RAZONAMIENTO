@@ -53,17 +53,14 @@ setup(
             # ros2 run razonamiento_package occupancy_mapper_node
             'occupancy_mapper_node = razonamiento_package.occupancy_mapper_node:main',
 
-            # ros2 run razonamiento_package input_bridge_node
-            'llm_input_bridge_node = razonamiento_package.llm_input_bridge_node:main',
-
             # ros2 run razonamiento_package map_semantic_extractor_node
             "map_semantic_extractor_node = razonamiento_package.map_semantic_extractor_node:main",
-            
-            # ros2 run razonamiento_package json_dumper_node
-            "json_dumper_node = razonamiento_package.json_dumper_node:main",
 
             # ros2 run razonamiento_package llm_backend_node
-            "llm_backend_node = razonamiento_package.llm_backend_node:main"
+            "llm_backend_node = razonamiento_package.llm_backend_node:main",
+
+            # ros2 run razonamiento_package llm_state_builder_node
+            "llm_state_builder_node = razonamiento_package.llm_state_builder_node:main"
 
         ],
     },
