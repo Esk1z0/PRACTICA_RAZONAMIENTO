@@ -172,6 +172,36 @@ def generate_launch_description():
         }]
     )
 
+    #dumper
+    topic_arg = DeclareLaunchArgument(
+        "topic",
+        default_value="/llm/world_state",
+        description="Topic std_msgs/String que contiene el JSON"
+    )
+
+    out_arg = DeclareLaunchArgument(
+        "out",
+        default_value="/ros2_ws/maps/map_snapshot.json",
+        description="Ruta del fichero JSON de salida"
+    )
+
+    mode_arg = DeclareLaunchArgument(
+        "mode",
+        default_value="last",
+        description="Modo de escritura: last | append"
+    )
+
+    json_dumper = Node(
+        package="razonamiento_package",   
+        executable="json_dumper_node",    
+        name="json_dumper",
+        output="screen",
+        parameters=[{
+            "topic": LaunchConfiguration("topic"),
+            "out": LaunchConfiguration("out"),
+            "mode": LaunchConfiguration("mode"),
+        }]
+    )
 
 
     return LaunchDescription([
@@ -188,6 +218,12 @@ def generate_launch_description():
         bug2_controller,
         goal_manager,
         map_semantic_extractor,
-        llm_state_builder
+        llm_state_builder,
+
+        #dumper
+        topic_arg,
+        out_arg,
+        mode_arg,
+        json_dumper,
 
     ])
