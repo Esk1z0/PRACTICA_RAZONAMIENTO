@@ -39,6 +39,7 @@ class LLMOrchestratorNode(Node):
         self.waiting_for_llm = False
         self.executing_action = False
         self.last_node_sent = None
+        self.current_action_index = 0
         
         # Publishers
         self.goal_pub = self.create_publisher(PoseStamped, '/goal', 10)
@@ -52,7 +53,7 @@ class LLMOrchestratorNode(Node):
         self.create_subscription(String, '/llm/world_state', self.state_callback, 10)
         self.create_subscription(String, '/llm/response', self.llm_callback, 10)
         
-        self.get_logger().info(f'Orchestrator started - Mode: {self.mode}')
+        self.get_logger().info(f'✓ Orchestrator ready | Mode: {self.mode}')
     
     # ===== CALLBACKS =====
     
@@ -63,8 +64,8 @@ class LLMOrchestratorNode(Node):
         # Detectar mensajes finales
         if any(tag in data for tag in ['[ÉXITO]', '[TIMEOUT]', '[VIOLACIÓN]', '[MENSAJE_FINAL]']):
             self.publish_event('EXPERIMENT_END', data)
-            self.get_logger().info(f'Experimento terminado: {data}')
-            self.create_timer(10.0, lambda: self.get_logger().info('Cerrando orchestrator...') or exit(0), once=True)
+            self.get_logger().info(f'Experiment finished: {data}')
+            self.create_timer(10.0, lambda: self.get_logger().info('Shutting down...') or exit(0), once=True)
             return
         
         # Actualizar objetivo
@@ -83,6 +84,7 @@ class LLMOrchestratorNode(Node):
         if 'REACHED' in feedback:
             self.publish_event('WAYPOINT_REACHED', f'{self.last_node_sent}')
             self.executing_action = False
+            self.current_action_index += 1
             self.process_next_action()
         elif 'UNREACHABLE' in feedback:
             self.publish_event('UNREACHABLE', f'{self.last_node_sent} - {feedback}')
@@ -116,6 +118,8 @@ class LLMOrchestratorNode(Node):
         
         try:
             data = json.loads(msg.data)
+            
+            # El LLM backend envuelve la respuesta en {"id": "...", "response": {...}}
             tick = data.get('id')
             
             if tick != self.current_tick:
@@ -135,6 +139,8 @@ class LLMOrchestratorNode(Node):
             
         except json.JSONDecodeError:
             self.publish_event('ERROR', 'Invalid LLM response JSON')
+        except Exception as e:
+            self.publish_event('ERROR', f'Error processing LLM response: {str(e)}')
     
     # ===== CICLO PRINCIPAL =====
     
@@ -258,14 +264,12 @@ Modos válidos: "graph_node", "frontier", "REPLAN"
         elif mode == 'frontier':
             # Verificar que el frontier existe
             frontiers = self.world_state.get('frontiers', [])
-            frontier_ids = [f.get('id', f'frontier_{i}') for i, f in enumerate(frontiers)]
             
-            if target not in frontier_ids:
+            if not any(f.get('id') == target for f in frontiers):
                 return False, f'Frontier {target} no existe'
             
             # Obtener coordenadas
-            idx = frontier_ids.index(target)
-            frontier = frontiers[idx]
+            frontier = next(f for f in frontiers if f.get('id') == target)
             x, y = frontier['x'], frontier['y']
         
         # Validar coordenadas dentro del mapa
@@ -322,21 +326,11 @@ Modos válidos: "graph_node", "frontier", "REPLAN"
             x, y = node['x'], node['y']
         elif mode == 'frontier':
             frontiers = self.world_state['frontiers']
-            frontier_ids = [f.get('id', f'frontier_{i}') for i, f in enumerate(frontiers)]
-            idx = frontier_ids.index(target)
-            frontier = frontiers[idx]
+            frontier = next(f for f in frontiers if f.get('id') == target)
             x, y = frontier['x'], frontier['y']
         
-        # Verificar si ya está en el target
-        robot = self.world_state.get('robot')
-        if robot:
-            import math
-            dist = math.hypot(robot['x'] - x, robot['y'] - y)
-            if dist < 0.5:  # Ya está ahí
-                self.publish_event('ALREADY_AT_TARGET', target)
-                self.current_action_index += 1
-                self.process_next_action()
-                return
+        # ELIMINADO: Check de "ya está en el target"
+        # Siempre enviar goal y esperar confirmación del Bug2
         
         # Enviar goal
         goal_msg = PoseStamped()
