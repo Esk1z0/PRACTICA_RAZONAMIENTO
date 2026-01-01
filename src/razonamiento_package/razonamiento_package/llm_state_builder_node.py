@@ -309,15 +309,16 @@ class LLMStateBuilderNode(Node):
         if self.frontiers:
             state['frontiers'] = [
                 {
+                    'id': f'frontier_{i}',
                     'x': f['x'],
                     'y': f['y'],
                     'size': int(f['size'])
                 }
-                for f in self.frontiers
+                for i, f in enumerate(self.frontiers, start=1)
             ]
         else:
             state['frontiers'] = []
-        
+
         # ===== GRAFO TOPOLÓGICO CON VECINOS =====
         if self.graph_nodes:
             state['graph'] = [

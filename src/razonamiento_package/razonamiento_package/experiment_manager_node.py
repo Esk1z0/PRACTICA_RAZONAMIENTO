@@ -58,17 +58,13 @@ class ExperimentManagerNode(Node):
         self.check_timer = self.create_timer(1.0 / self.check_rate, self.check_experiment_status)
         
         # ============= INICIALIZACIÓN =============
-        self.get_logger().info('=' * 70)
-        self.get_logger().info('Experiment Manager Node Started')
-        self.get_logger().info(f'Experiment file: {self.experiment_file}')
-        self.get_logger().info(f'Goal threshold: {self.goal_threshold}m')
-        self.get_logger().info('=' * 70)
+        self.get_logger().info(f'✓ Experiment Manager ready | File: {self.experiment_file or "none"} | Threshold: {self.goal_threshold}m')
         
         # Cargar experimento
         if self.experiment_file and self.experiment_file != '':
             self.load_experiment()
         else:
-            self.get_logger().warn('No experiment file provided, waiting...')
+            self.get_logger().warn('No experiment file - waiting...')
     
     # ============= CALLBACKS =============
     
@@ -108,7 +104,8 @@ class ExperimentManagerNode(Node):
                         break
         
         if self.zones and not self.experiment_running:
-            self.get_logger().info(f'Zonas cargadas: {list(self.zones.keys())}')
+            zone_names = ', '.join(list(self.zones.keys()))
+            self.get_logger().info(f'✓ Zones loaded: {zone_names}')
     
     # ============= CARGA DE EXPERIMENTO =============
     
@@ -119,34 +116,39 @@ class ExperimentManagerNode(Node):
                 config = yaml.safe_load(f)
             
             if 'experiment' not in config:
-                self.get_logger().error('Archivo YAML sin sección "experiment"')
+                self.get_logger().error('YAML missing "experiment" section')
                 return
             
             exp = config['experiment']
             self.experiment_type = exp.get('type')
             self.experiment = exp
             
-            self.get_logger().info('=' * 70)
-            self.get_logger().info(f'Experimento cargado: {self.experiment_type}')
-            self.get_logger().info(f'Descripción: {exp.get("description", "N/A")}')
-            
+            # Log compacto según tipo
             if self.experiment_type == 'single_goal':
-                self.get_logger().info(f'Objetivo: {exp.get("goal")}')
+                goal_str = exp.get('goal', {}).get('zone', exp.get('goal', {}))
+                self.get_logger().info(f'✓ Experiment loaded: {self.experiment_type} → {goal_str}')
             elif self.experiment_type in ['multigoal_simple', 'multigoal_restricted']:
-                self.get_logger().info(f'Objetivos: {len(exp.get("goals", []))}')
+                num_goals = len(exp.get('goals', []))
+                restrictions = []
                 if self.experiment_type == 'multigoal_restricted':
-                    self.get_logger().info(f'Orden requerido: {exp.get("require_order", False)}')
-                    self.get_logger().info(f'Zonas prohibidas: {exp.get("forbidden_zones", [])}')
-                    self.get_logger().info(f'Tiempo límite: {exp.get("time_limit", "N/A")}s')
-            
-            self.get_logger().info('=' * 70)
+                    if exp.get('require_order'):
+                        restrictions.append('ORDER')
+                    if exp.get('forbidden_zones'):
+                        restrictions.append(f'FORBIDDEN:{",".join(exp.get("forbidden_zones", []))}')
+                    if exp.get('time_limit'):
+                        restrictions.append(f'{exp.get("time_limit")}s')
+                
+                restriction_str = f' [{", ".join(restrictions)}]' if restrictions else ''
+                self.get_logger().info(f'✓ Experiment loaded: {self.experiment_type} → {num_goals} goals{restriction_str}')
+            else:
+                self.get_logger().info(f'✓ Experiment loaded: {self.experiment_type}')
             
         except FileNotFoundError:
-            self.get_logger().error(f'Archivo no encontrado: {self.experiment_file}')
+            self.get_logger().error(f'File not found: {self.experiment_file}')
         except yaml.YAMLError as e:
-            self.get_logger().error(f'Error parseando YAML: {e}')
+            self.get_logger().error(f'YAML parse error: {e}')
         except Exception as e:
-            self.get_logger().error(f'Error cargando experimento: {e}')
+            self.get_logger().error(f'Error loading experiment: {e}')
     
     def start_experiment(self):
         """Inicia el experimento y publica el objetivo inicial"""
@@ -165,8 +167,7 @@ class ExperimentManagerNode(Node):
             message = f"Experimento desconocido: {self.experiment_type}"
         
         self.publish_experiment_message(message)
-        self.get_logger().info('🚀 EXPERIMENTO INICIADO')
-        self.get_logger().info(f'Mensaje inicial publicado: {message[:100]}...')
+        self.get_logger().info(f'🚀 EXPERIMENT START | {message[:80]}...')
     
     # ============= GENERACIÓN DE MENSAJES =============
     
@@ -283,7 +284,7 @@ class ExperimentManagerNode(Node):
                 self.goals_completed.append(i)
                 message = f"Objetivo {len(self.goals_completed)}/{len(goals)} alcanzado: {self.format_goal(goal)}."
                 self.publish_experiment_message(message)
-                self.get_logger().info(f'✓ {message}')
+                self.get_logger().info(f'✓ Goal {len(self.goals_completed)}/{len(goals)}: {self.format_goal(goal)}')
         
         # Verificar si todos completados
         if len(self.goals_completed) == len(goals):
@@ -310,7 +311,7 @@ class ExperimentManagerNode(Node):
                 self.goals_completed.append(next_goal_index)
                 message = f"Objetivo {len(self.goals_completed)}/{len(goals)} alcanzado (en orden): {self.format_goal(goal)}."
                 self.publish_experiment_message(message)
-                self.get_logger().info(f'✓ {message}')
+                self.get_logger().info(f'✓ Goal {len(self.goals_completed)}/{len(goals)} (ordered): {self.format_goal(goal)}')
                 
                 # Verificar si todos completados
                 if len(self.goals_completed) == len(goals):
@@ -335,7 +336,7 @@ class ExperimentManagerNode(Node):
                     self.goals_completed.append(i)
                     message = f"Objetivo {len(self.goals_completed)}/{len(goals)} alcanzado: {self.format_goal(goal)}."
                     self.publish_experiment_message(message)
-                    self.get_logger().info(f'✓ {message}')
+                    self.get_logger().info(f'✓ Goal {len(self.goals_completed)}/{len(goals)}: {self.format_goal(goal)}')
             
             # Verificar si todos completados
             if len(self.goals_completed) == len(goals):
@@ -446,15 +447,10 @@ class ExperimentManagerNode(Node):
         
         elapsed_time = time.time() - self.start_time
         
-        self.get_logger().info('=' * 70)
         if success:
-            self.get_logger().info('✅ EXPERIMENTO COMPLETADO CON ÉXITO')
+            self.get_logger().info(f'✅ SUCCESS | {elapsed_time:.1f}s | {message}')
         else:
-            self.get_logger().error('❌ EXPERIMENTO FALLIDO')
-        
-        self.get_logger().info(f'Tiempo total: {elapsed_time:.2f}s')
-        self.get_logger().info(f'Mensaje: {message}')
-        self.get_logger().info('=' * 70)
+            self.get_logger().error(f'❌ FAILED | {elapsed_time:.1f}s | {message}')
         
         # Publicar mensaje final
         self.publish_experiment_message(message)
@@ -463,7 +459,7 @@ class ExperimentManagerNode(Node):
         time.sleep(1.0)
         
         # Terminar ejecución del nodo
-        self.get_logger().info('Terminando ejecución del nodo...')
+        self.get_logger().info('Shutting down...')
         raise SystemExit(0)
 
 
@@ -477,7 +473,7 @@ def main(args=None):
     except SystemExit:
         pass
     except KeyboardInterrupt:
-        node.get_logger().info('Experimento interrumpido por usuario')
+        node.get_logger().info('Interrupted by user')
     finally:
         node.destroy_node()
         rclpy.shutdown()

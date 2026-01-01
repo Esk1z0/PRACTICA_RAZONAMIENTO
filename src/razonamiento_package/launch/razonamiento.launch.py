@@ -26,7 +26,7 @@ def generate_launch_description():
 
     robot_name = LaunchConfiguration('robot_name')
     control_rate = LaunchConfiguration('control_rate')
-    auto_generate_goals = LaunchConfiguration('auto_generate_goals')
+    #auto_generate_goals = LaunchConfiguration('auto_generate_goals')
 
     laser_x = LaunchConfiguration('laser_x')
     laser_y = LaunchConfiguration('laser_y')
@@ -112,34 +112,34 @@ def generate_launch_description():
             
             # === NUEVOS PARÁMETROS DE UNREACHABLE ===
             'enable_unreachable_detection': True,
-            'max_distance_factor': 5.0,
-            'max_state_changes': 30,
-            'max_wall_follow_time': 45.0,
-            'feedback_rate_hz': 2.0,
+            'max_distance_factor': 20.0,
+            'max_state_changes': 50,
+            'max_wall_follow_time': 120.0,
+            'feedback_rate_hz': 1.0,
         }],
         emulate_tty=True
     )
 
-    goal_manager = Node(
-        package='razonamiento_package',
-        executable='goal_manager_node',
-        name='goal_manager',
-        output='screen',
-        parameters=[{
-            'goal_tolerance': 0.8,
-            'min_goal_distance': 2.0,
-            'map_min_x': -7.40,
-            'map_max_x': 2.45,
-            'map_min_y': -2.45,
-            'map_max_y': 2.45,
-            'map_buffer': 0.2,
-            'auto_generate': auto_generate_goals,
-            'goal_frame': 'world',
-            'check_rate_hz': 10.0,
-            'max_attempts': 200
-        }],
-        emulate_tty=True
-    )
+    #goal_manager = Node(
+    #    package='razonamiento_package',
+    #    executable='goal_manager_node',
+    #    name='goal_manager',
+    #    output='screen',
+    #    parameters=[{
+    #        'goal_tolerance': 0.8,
+    #        'min_goal_distance': 2.0,
+    #        'map_min_x': -7.40,
+    #        'map_max_x': 2.45,
+    #        'map_min_y': -2.45,
+    #        'map_max_y': 2.45,
+    #        'map_buffer': 0.2,
+    #        'auto_generate': auto_generate_goals,
+    #        'goal_frame': 'world',
+    #        'check_rate_hz': 10.0,
+    #        'max_attempts': 200
+    #    }],
+    #    emulate_tty=True
+    #)
 
     map_semantic_extractor = Node(
         package="razonamiento_package",   
@@ -193,47 +193,46 @@ def generate_launch_description():
         }],
     )
 
-
-
-
-
-
-    #dumper
-    topic_arg = DeclareLaunchArgument(
-        "topic",
-        default_value="/llm/world_state",
-        description="Topic std_msgs/String que contiene el JSON"
-    )
-
-    out_arg = DeclareLaunchArgument(
-        "out",
-        default_value="/ros2_ws/maps/map_snapshot.json",
-        description="Ruta del fichero JSON de salida"
-    )
-
-    mode_arg = DeclareLaunchArgument(
-        "mode",
-        default_value="last",
-        description="Modo de escritura: last | append"
-    )
-
-    json_dumper = Node(
-        package="razonamiento_package",   
-        executable="json_dumper_node",    
-        name="json_dumper",
-        output="screen",
+    llm_backend_node = Node(
+        package='razonamiento_package',
+        executable='llm_backend_node',
+        name='llm_backend',
+        output='screen',
         parameters=[{
-            "topic": LaunchConfiguration("topic"),
-            "out": LaunchConfiguration("out"),
-            "mode": LaunchConfiguration("mode"),
+            'enable_debug_logs': False
         }]
     )
 
+    llm_orchestrator_node = Node(
+        package='razonamiento_package',
+        executable='llm_orchestrator_node',
+        name='llm_orchestrator',
+        output='screen',
+        parameters=[{
+            'mode': 'react',
+            'map_min_x': -8.0,
+            'map_min_y': -3.0,
+            'map_max_x': 3.0,
+            'map_max_y': 3.0
+        }]
+    )
+    
+    monitor_node = Node(
+        package='razonamiento_package',
+        executable='monitor_node',
+        name='monitor',
+        output='screen',
+        parameters=[{
+            'output_dir': './maps',
+            'log_filename': 'prueba_1',  
+            'buffer_size': 100
+        }]
+    )
 
     return LaunchDescription([
         declare_robot_name,
         declare_control_rate,
-        declare_auto_goals,
+        #declare_auto_goals,
         declare_laser_x, declare_laser_y, declare_laser_z, declare_laser_yaw,
         declare_slam_params,
         declare_zones_file,
@@ -243,16 +242,13 @@ def generate_launch_description():
         laser_static_tf,
         slam_toolbox,        # <- clave para /map y map->odom
         bug2_controller,
-        goal_manager,
+        #goal_manager,
         map_semantic_extractor,
         llm_state_builder,
         experiment_manager_node,
+        llm_backend_node,
+        llm_orchestrator_node,
+        monitor_node
 
-
-        #dumper
-        topic_arg,
-        out_arg,
-        mode_arg,
-        json_dumper,
 
     ])
