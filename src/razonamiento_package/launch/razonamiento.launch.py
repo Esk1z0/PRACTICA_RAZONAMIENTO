@@ -35,10 +35,19 @@ def generate_launch_description():
 
     slam_params_file = LaunchConfiguration('slam_params_file')
 
+    # state_builder zones_file
     declare_zones_file = DeclareLaunchArgument(
         'zones_file',
         default_value="/ros2_ws/src/razonamiento_package/config/zones.yaml"
     )
+
+    # experiment_file parameter
+    declare_experiment_file = DeclareLaunchArgument(
+        'experiment_file',
+        default_value="/ros2_ws/src/razonamiento_package/config/single_goal.yaml",
+        description='Path to experiment configuration YAML file'
+    )
+
 
     coppelia_interface = Node(
         package='razonamiento_package',
@@ -172,6 +181,23 @@ def generate_launch_description():
         }]
     )
 
+    experiment_manager_node = Node(
+        package='tu_paquete',
+        executable='experiment_manager_node.py',
+        name='experiment_manager',
+        output='screen',
+        parameters=[{
+            'experiment_file': LaunchConfiguration('experiment_file'),
+            'goal_distance_threshold': 0.8,
+            'check_rate_hz': 5.0,
+        }],
+    ),
+
+
+
+
+
+
     #dumper
     topic_arg = DeclareLaunchArgument(
         "topic",
@@ -211,6 +237,7 @@ def generate_launch_description():
         declare_laser_x, declare_laser_y, declare_laser_z, declare_laser_yaw,
         declare_slam_params,
         declare_zones_file,
+        declare_experiment_file,
 
         coppelia_interface,
         laser_static_tf,
@@ -219,6 +246,8 @@ def generate_launch_description():
         goal_manager,
         map_semantic_extractor,
         llm_state_builder,
+        experiment_manager_node,
+
 
         #dumper
         topic_arg,

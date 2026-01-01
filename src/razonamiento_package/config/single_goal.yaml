@@ -1,0 +1,13 @@
+# Experimento: Objetivo único
+
+experiment:
+  type: "single_goal"
+  description: "Navega a la cocina"
+  
+  # Objetivo por zona
+  goal:
+    zone: "cocina"
+  
+  # O alternativamente, objetivo por coordenadas:
+  # goal:
+  #   coordinates: [3.5, 2.8]

@@ -1,0 +1,12 @@
+# Experimento: Múltiples objetivos sin orden
+
+experiment:
+  type: "multigoal_simple"
+  description: "Visita todas las habitaciones principales"
+  
+  goals:
+    - zone: "salon"
+    - zone: "cocina"
+    - zone: "habitacion"
+    # También se pueden mezclar zonas y coordenadas:
+    - coordinates: [1.5, 3.2]

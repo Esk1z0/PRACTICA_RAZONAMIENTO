@@ -1,0 +1,18 @@
+# Experimento: Múltiples objetivos con restricciones
+
+experiment:
+  type: "multigoal_restricted"
+  description: "Recorrido completo de la casa sin entrar al baño"
+  
+  # Objetivos (en orden si require_order es true)
+  goals:
+    - zone: "salon"
+    - zone: "cocina"
+    - zone: "pasillo"
+    - zone: "habitacion"
+  
+  # Restricciones
+  require_order: true                    # true = debe seguir orden estricto
+  forbidden_zones: ["bano"]              # Zonas prohibidas
+  forbidden_time_threshold: 2.0          # Segundos permitidos en zona prohibida
+  time_limit: 120                        # Tiempo límite total en segundos

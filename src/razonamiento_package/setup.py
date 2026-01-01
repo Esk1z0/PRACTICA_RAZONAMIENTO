@@ -62,6 +62,9 @@ setup(
             # ros2 run razonamiento_package llm_state_builder_node
             "llm_state_builder_node = razonamiento_package.llm_state_builder_node:main",
 
+            # ros2 run razonamiento_package experiment_manager_node
+            "experiment_manager_node = razonamiento_package.experiment_manager_node:main",
+
             # ros2 run razonamiento_package json_dumper_node
             "json_dumper_node = razonamiento_package.json_dumper_node:main",
 
