@@ -23,7 +23,32 @@ class LLMBackendNode(Node):
         self.declare_parameter('llm_temperature', 0.2)
         self.declare_parameter('llm_max_tokens', 500)
         self.declare_parameter('system_prompt', 
-            'Responde SOLO en JSON con formato: {\"action\": \"...\", \"args\": {...}, \"confidence\": 0.0-1.0}')
+            '''Eres un robot navegador. Debes responder SIEMPRE en JSON estricto con esta estructura:
+
+{
+  "actions": [
+    {
+      "mode": "graph_node",
+      "target": "nombre_del_nodo",
+      "fallback": {
+        "mode": "graph_node",
+        "target": "nodo_alternativo"
+      }
+    }
+  ],
+  "notes": {
+    "preconditions": "Condiciones que te llevaron a este plan",
+    "expected_result": "Resultado esperado del plan"
+  }
+}
+
+Modos válidos: "graph_node" (nodo del grafo), "frontier" (área sin explorar), "REPLAN" (pedir nuevo estado).
+- "graph_node" y "frontier" requieren "target" con el ID del nodo/frontier.
+- "REPLAN" NO tiene "target".
+- Cada acción DEBE tener un "fallback" (plan B), que sigue la misma estructura pero SIN sub-fallback.
+- El fallback puede ser null solo si no hay alternativa posible.
+
+NO añadas texto fuera del JSON. Responde SOLO con el JSON válido.''')
         self.declare_parameter('enable_debug_logs', False)
         
         # Obtener parámetros
@@ -113,18 +138,11 @@ class LLMBackendNode(Node):
         state_text = msg.data
         self.total_queries += 1
         
-        self.get_logger().info('-' * 60)
-        self.get_logger().info(f'Query #{self.total_queries} received')
-        
-        # Mostrar input (truncado si es muy largo)
-        if len(state_text) > 200:
-            preview = state_text[:200] + '...'
-            self.get_logger().info(f'Input ({len(state_text)} chars): {preview}')
-        else:
-            self.get_logger().info(f'Input: {state_text}')
+        # Estimar tokens de entrada (aproximación: 1 token ≈ 4 chars)
+        input_tokens = len(state_text) // 4
         
         # Llamar al LLM
-        response_text = self.decide(state_text)
+        response_text, output_tokens = self.decide(state_text)
         
         if response_text is not None:
             self.successful_queries += 1
@@ -134,31 +152,10 @@ class LLMBackendNode(Node):
             response_msg.data = response_text
             self.response_pub.publish(response_msg)
             
-            # Mostrar output (truncado si es muy largo)
-            if len(response_text) > 200:
-                preview = response_text[:200] + '...'
-                self.get_logger().info(f'Response ({len(response_text)} chars): {preview}')
-            else:
-                self.get_logger().info(f'Response: {response_text}')
-            
-            # Intentar parsear JSON para validación
-            try:
-                parsed = json.loads(response_text)
-                if self.debug_logs:
-                    self.get_logger().debug(f'Parsed JSON: {parsed}')
-                
-                # Validar estructura esperada
-                if 'action' in parsed and 'args' in parsed and 'confidence' in parsed:
-                    self.get_logger().info(
-                        f'✓ Valid JSON: action={parsed["action"]}, '
-                        f'confidence={parsed["confidence"]}'
-                    )
-                else:
-                    self.get_logger().warn('⚠ JSON missing expected fields (action, args, confidence)')
-            except json.JSONDecodeError:
-                self.get_logger().warn('⚠ Response is not valid JSON')
-            
-            self.get_logger().info(f'✓ Query successful ({self.successful_queries}/{self.total_queries})')
+            self.get_logger().info(
+                f'Query #{self.total_queries} ✓ | '
+                f'In: ~{input_tokens}t | Out: ~{output_tokens}t'
+            )
         else:
             self.failed_queries += 1
             
@@ -173,23 +170,18 @@ class LLMBackendNode(Node):
             response_msg.data = error_response
             self.response_pub.publish(response_msg)
             
-            self.get_logger().error(f'✗ Query failed ({self.failed_queries}/{self.total_queries})')
-        
-        self.get_logger().info('-' * 60)
+            self.get_logger().error(f'Query #{self.total_queries} ✗')
     
-    def decide(self, state_text: str) -> str:
+    def decide(self, state_text: str):
         """
-        Llama al LLM con el state_text y devuelve la respuesta.
-        Retorna None si hay error.
+        Llama al LLM con el state_text y devuelve la respuesta y tokens.
+        Retorna (None, 0) si hay error.
         """
         if self.client is None:
             self.get_logger().error('OpenAI client not initialized - cannot process query')
-            return None
+            return None, 0
         
         try:
-            if self.debug_logs:
-                self.get_logger().debug('Sending request to LLM...')
-            
             response = self.client.chat.completions.create(
                 model=self.model,
                 messages=[
@@ -203,19 +195,28 @@ class LLMBackendNode(Node):
             # Extraer respuesta
             answer = response.choices[0].message.content
             
+            # Obtener tokens (si disponible)
+            output_tokens = 0
+            if hasattr(response, 'usage') and response.usage:
+                output_tokens = response.usage.completion_tokens
+            else:
+                # Estimación si no está disponible
+                output_tokens = len(answer) // 4
+            
             if self.debug_logs:
                 self.get_logger().debug(f'LLM response received: {len(answer)} chars')
                 self.get_logger().debug(f'Finish reason: {response.choices[0].finish_reason}')
-                self.get_logger().debug(f'Tokens used: {response.usage.total_tokens if hasattr(response, "usage") else "N/A"}')
+                if hasattr(response, 'usage'):
+                    self.get_logger().debug(f'Tokens - Total: {response.usage.total_tokens}, Prompt: {response.usage.prompt_tokens}, Completion: {response.usage.completion_tokens}')
             
-            return answer
+            return answer, output_tokens
         
         except Exception as e:
             self.get_logger().error(f'Error calling LLM: {e}')
             if self.debug_logs:
                 import traceback
                 self.get_logger().error(traceback.format_exc())
-            return None
+            return None, 0
 
 
 def main(args=None):
