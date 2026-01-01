@@ -182,8 +182,8 @@ def generate_launch_description():
     )
 
     experiment_manager_node = Node(
-        package='tu_paquete',
-        executable='experiment_manager_node.py',
+        package='razonamiento_package',
+        executable='experiment_manager_node',
         name='experiment_manager',
         output='screen',
         parameters=[{
@@ -191,7 +191,7 @@ def generate_launch_description():
             'goal_distance_threshold': 0.8,
             'check_rate_hz': 5.0,
         }],
-    ),
+    )
 
 
 
