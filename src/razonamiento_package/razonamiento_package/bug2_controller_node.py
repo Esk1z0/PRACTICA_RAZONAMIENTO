@@ -2,7 +2,7 @@
 
 import rclpy
 from rclpy.node import Node
-from rclpy.qos import QoSProfile, ReliabilityPolicy, DurabilityPolicy
+from rclpy.qos import QoSProfile, ReliabilityPolicy, DurabilityPolicy, HistoryPolicy
 from geometry_msgs.msg import Twist, PoseStamped
 from sensor_msgs.msg import Range
 from std_msgs.msg import String
@@ -97,12 +97,19 @@ class Bug2ControllerNode(Node):
         goal_qos = QoSProfile(
             reliability=ReliabilityPolicy.RELIABLE,
             durability=DurabilityPolicy.TRANSIENT_LOCAL,
-            depth=1
+            depth=1,
+            history=HistoryPolicy.KEEP_LAST 
+        )
+        feedback_qos = QoSProfile(
+            depth=10,
+            reliability=ReliabilityPolicy.RELIABLE,
+            durability=DurabilityPolicy.VOLATILE,
+            history=HistoryPolicy.KEEP_LAST
         )
         
         # ============= PUBLISHERS =============
         self.cmd_vel_pub = self.create_publisher(Twist, '/cmd_vel', 10)
-        self.feedback_pub = self.create_publisher(String, '/bug2/feedback', 10)
+        self.feedback_pub = self.create_publisher(String, '/bug2/feedback', feedback_qos)
         
         # ============= SUBSCRIBERS =============
         self.pose_sub = self.create_subscription(

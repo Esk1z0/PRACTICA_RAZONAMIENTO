@@ -3,7 +3,9 @@
 import rclpy
 from rclpy.node import Node
 from std_msgs.msg import String
+from rclpy.qos import QoSProfile, ReliabilityPolicy, DurabilityPolicy, HistoryPolicy
 import json
+import re
 
 try:
     from openai import OpenAI
@@ -82,20 +84,35 @@ NO añadas texto fuera del JSON. Responde SOLO con el JSON válido.''')
                 self.get_logger().error(f'ERROR initializing OpenAI client: {e}')
                 self.client = None
         
-        # ============= COMUNICACIÓN ROS2 (Request-Response Pattern) =============
+        # ============= QoS =============
+        request_qos = QoSProfile(
+            depth=5,
+            reliability=ReliabilityPolicy.RELIABLE,
+            durability=DurabilityPolicy.VOLATILE,
+            history=HistoryPolicy.KEEP_LAST
+        )
+        
+        response_qos = QoSProfile(
+            depth=5,
+            reliability=ReliabilityPolicy.RELIABLE,
+            durability=DurabilityPolicy.VOLATILE,
+            history=HistoryPolicy.KEEP_LAST
+        )
+        
+        # ============= COMUNICACIÓN ROS2 =============
         # Subscriber: recibe queries
         self.request_sub = self.create_subscription(
             String,
             '/llm/query',
             self.query_callback,
-            10
+            request_qos
         )
         
         # Publisher: publica respuestas
         self.response_pub = self.create_publisher(
             String,
             '/llm/response',
-            10
+            response_qos
         )
         
         # ============= ESTADÍSTICAS =============
@@ -133,44 +150,110 @@ NO añadas texto fuera del JSON. Responde SOLO con el JSON válido.''')
             self.get_logger().warn(f'Connection test failed: {e}')
             self.get_logger().warn('LLM server may not be running')
     
+    def extract_tick_from_prompt(self, prompt: str) -> str:
+        """
+        Extrae el tick del prompt que envió el Orchestrator.
+        Busca líneas como: "Tick: tick_1"
+        """
+        # Buscar patrón "Tick: tick_X"
+        match = re.search(r'Tick:\s*(tick_\d+)', prompt)
+        if match:
+            return match.group(1)
+        
+        # Si no encuentra, usar un default
+        self.get_logger().warn('Could not extract tick from prompt, using default')
+        return 'tick_unknown'
+    
     def query_callback(self, msg):
         """Callback cuando llega una consulta al LLM"""
-        state_text = msg.data
+        prompt = msg.data
         self.total_queries += 1
         
+        # ============= EXTRAER TICK =============
+        tick = self.extract_tick_from_prompt(prompt)
+        self.get_logger().info(f'📥 Query #{self.total_queries} | Tick: {tick}')
+        
         # Estimar tokens de entrada (aproximación: 1 token ≈ 4 chars)
-        input_tokens = len(state_text) // 4
+        input_tokens = len(prompt) // 4
         
         # Llamar al LLM
-        response_text, output_tokens = self.decide(state_text)
+        llm_response, output_tokens = self.decide(prompt)
         
-        if response_text is not None:
+        if llm_response is not None:
             self.successful_queries += 1
             
-            # Publicar respuesta
-            response_msg = String()
-            response_msg.data = response_text
-            self.response_pub.publish(response_msg)
-            
-            self.get_logger().info(
-                f'Query #{self.total_queries} ✓ | '
-                f'In: ~{input_tokens}t | Out: ~{output_tokens}t'
-            )
+            # ============= PARSEAR RESPUESTA DEL LLM =============
+            try:
+                # Limpiar la respuesta (eliminar posibles markdown, espacios, etc)
+                llm_response_clean = llm_response.strip()
+                
+                # Si viene con ```json ... ```, quitarlo
+                if llm_response_clean.startswith('```'):
+                    llm_response_clean = re.sub(r'^```(?:json)?\s*', '', llm_response_clean)
+                    llm_response_clean = re.sub(r'\s*```$', '', llm_response_clean)
+                
+                # Parsear JSON
+                llm_json = json.loads(llm_response_clean)
+                
+                # ============= ENVOLVER CON EL TICK =============
+                wrapped_response = {
+                    "id": tick,  # ← ESTO ES LO QUE FALTABA
+                    "response": llm_json
+                }
+                
+                # Publicar respuesta envuelta
+                response_msg = String()
+                response_msg.data = json.dumps(wrapped_response)
+                self.response_pub.publish(response_msg)
+                
+                self.get_logger().info(
+                    f'📤 Query #{self.total_queries} ✓ | '
+                    f'Tick: {tick} | '
+                    f'Actions: {len(llm_json.get("actions", []))} | '
+                    f'In: ~{input_tokens}t | Out: ~{output_tokens}t'
+                )
+                
+                if self.debug_logs:
+                    self.get_logger().debug(f'Full response: {json.dumps(wrapped_response, indent=2)}')
+                
+            except json.JSONDecodeError as e:
+                self.get_logger().error(f'❌ LLM returned invalid JSON: {e}')
+                self.get_logger().error(f'Raw LLM response: {llm_response[:200]}...')
+                self.failed_queries += 1
+                
+                # Publicar respuesta de error con el tick
+                error_response = {
+                    "id": tick,
+                    "response": {
+                        "actions": [{"mode": "REPLAN"}],
+                        "notes": {
+                            "preconditions": "LLM returned invalid JSON",
+                            "expected_result": "Request replan"
+                        }
+                    }
+                }
+                response_msg = String()
+                response_msg.data = json.dumps(error_response)
+                self.response_pub.publish(response_msg)
         else:
             self.failed_queries += 1
             
-            # Publicar respuesta de error
-            error_response = json.dumps({
-                "action": "error",
-                "args": {},
-                "confidence": 0.0,
-                "error": "LLM query failed"
-            })
+            # Publicar respuesta de error con el tick
+            error_response = {
+                "id": tick,
+                "response": {
+                    "actions": [{"mode": "REPLAN"}],
+                    "notes": {
+                        "preconditions": "LLM query failed",
+                        "expected_result": "Request replan"
+                    }
+                }
+            }
             response_msg = String()
-            response_msg.data = error_response
+            response_msg.data = json.dumps(error_response)
             self.response_pub.publish(response_msg)
             
-            self.get_logger().error(f'Query #{self.total_queries} ✗')
+            self.get_logger().error(f'❌ Query #{self.total_queries} | Tick: {tick} - LLM call failed')
     
     def decide(self, state_text: str):
         """

@@ -4,6 +4,7 @@ import rclpy
 from rclpy.node import Node
 from std_msgs.msg import String
 from geometry_msgs.msg import PoseStamped
+from rclpy.qos import QoSProfile, ReliabilityPolicy, DurabilityPolicy, HistoryPolicy
 import json
 import os
 from datetime import datetime
@@ -30,6 +31,13 @@ class MonitorNode(Node):
         
         # ============= INICIALIZAR ARCHIVO =============
         self.initialize_log_file()
+        # ============ QOS ================
+        event_qos = QoSProfile(
+            depth=100,
+            reliability=ReliabilityPolicy.BEST_EFFORT,  # ← Cambiar a BEST_EFFORT
+            durability=DurabilityPolicy.VOLATILE,
+            history=HistoryPolicy.KEEP_LAST
+        )
         
         # ============= SUBSCRIBERS =============
         # Orquestador
@@ -37,7 +45,7 @@ class MonitorNode(Node):
             String,
             '/orchestrator/events',
             lambda msg: self.log_message('ORCHESTRATOR_EVENT', msg.data),
-            10
+            event_qos
         )
         
         # Experiment Manager

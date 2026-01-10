@@ -4,6 +4,7 @@ import rclpy
 from rclpy.node import Node
 from std_msgs.msg import String
 from geometry_msgs.msg import PoseWithCovarianceStamped
+from rclpy.qos import QoSProfile, ReliabilityPolicy, DurabilityPolicy, HistoryPolicy
 from visualization_msgs.msg import MarkerArray
 import yaml
 import math
@@ -36,8 +37,23 @@ class ExperimentManagerNode(Node):
         self.last_zone_entry_time = {}  # {zone_name: timestamp}
         self.experiment_running = False
         
+        # ============= QOS =================
+        experiment_qos = QoSProfile(
+            depth=1,
+            reliability=ReliabilityPolicy.RELIABLE,
+            durability=DurabilityPolicy.TRANSIENT_LOCAL,  # ← Cambiar a TRANSIENT_LOCAL
+            history=HistoryPolicy.KEEP_LAST
+        )
+
+        event_qos = QoSProfile(
+            depth=100,  # Buffer grande
+            reliability=ReliabilityPolicy.RELIABLE,  # ← CRÍTICO: necesita todos los eventos
+            durability=DurabilityPolicy.VOLATILE,
+            history=HistoryPolicy.KEEP_LAST
+        )
+
         # ============= PUBLISHERS =============
-        self.experiment_pub = self.create_publisher(String, '/experiment', 10)
+        self.experiment_pub = self.create_publisher(String, '/experiment', experiment_qos)
         
         # ============= SUBSCRIBERS =============
         self.pose_sub = self.create_subscription(

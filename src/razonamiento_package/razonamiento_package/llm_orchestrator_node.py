@@ -4,6 +4,7 @@ import rclpy
 from rclpy.node import Node
 from std_msgs.msg import String
 from geometry_msgs.msg import PoseStamped
+from rclpy.qos import QoSProfile, ReliabilityPolicy, DurabilityPolicy, HistoryPolicy
 import json
 import time
 
@@ -41,17 +42,59 @@ class LLMOrchestratorNode(Node):
         self.last_node_sent = None
         self.current_action_index = 0
         
+        # ============= QoS =============
+        goal_qos = QoSProfile(
+            depth=1,  # Solo el último goal en el buffer
+            reliability=ReliabilityPolicy.RELIABLE,
+            durability=DurabilityPolicy.TRANSIENT_LOCAL,
+            history=HistoryPolicy.KEEP_LAST
+        )
+
+        request_qos = QoSProfile(
+            depth=2,
+            reliability=ReliabilityPolicy.RELIABLE,
+            durability=DurabilityPolicy.VOLATILE,
+            history=HistoryPolicy.KEEP_LAST
+        )
+
+        event_qos = QoSProfile(
+            depth=100,  
+            reliability=ReliabilityPolicy.RELIABLE,  # ← CAMBIO: de BEST_EFFORT a RELIABLE
+            durability=DurabilityPolicy.VOLATILE,
+            history=HistoryPolicy.KEEP_LAST
+        )
+
+        feedback_qos = QoSProfile(
+            depth=10,
+            reliability=ReliabilityPolicy.RELIABLE,
+            durability=DurabilityPolicy.VOLATILE,
+            history=HistoryPolicy.KEEP_LAST
+        )
+
+        response_qos = QoSProfile(
+            depth=5,
+            reliability=ReliabilityPolicy.RELIABLE,
+            durability=DurabilityPolicy.VOLATILE,
+            history=HistoryPolicy.KEEP_LAST
+        )
+        experiment_qos = QoSProfile(
+            depth=1,
+            reliability=ReliabilityPolicy.RELIABLE,
+            durability=DurabilityPolicy.TRANSIENT_LOCAL,
+            history=HistoryPolicy.KEEP_LAST
+        )
+
         # Publishers
-        self.goal_pub = self.create_publisher(PoseStamped, '/goal', 10)
-        self.state_request_pub = self.create_publisher(String, '/llm/state_request', 10)
-        self.llm_query_pub = self.create_publisher(String, '/llm/query', 10)
-        self.event_pub = self.create_publisher(String, '/orchestrator/events', 10)
+        self.goal_pub = self.create_publisher(PoseStamped, '/goal', goal_qos)
+        self.state_request_pub = self.create_publisher(String, '/llm/state_request', request_qos)
+        self.llm_query_pub = self.create_publisher(String, '/llm/query',request_qos)
+        self.event_pub = self.create_publisher(String, '/orchestrator/events', event_qos)
         
         # Subscribers
-        self.create_subscription(String, '/experiment', self.experiment_callback, 10)
-        self.create_subscription(String, '/bug2/feedback', self.bug2_callback, 10)
-        self.create_subscription(String, '/llm/world_state', self.state_callback, 10)
-        self.create_subscription(String, '/llm/response', self.llm_callback, 10)
+        self.create_subscription(String, '/experiment', self.experiment_callback, experiment_qos)
+        self.create_subscription(String, '/bug2/feedback', self.bug2_callback, feedback_qos)
+        self.create_subscription(String, '/llm/world_state', self.state_callback, response_qos)
+        self.create_subscription(String, '/llm/response', self.llm_callback, response_qos)
         
         self.get_logger().info(f'✓ Orchestrator ready | Mode: {self.mode}')
     
@@ -64,8 +107,8 @@ class LLMOrchestratorNode(Node):
         # Detectar mensajes finales
         if any(tag in data for tag in ['[ÉXITO]', '[TIMEOUT]', '[VIOLACIÓN]', '[MENSAJE_FINAL]']):
             self.publish_event('EXPERIMENT_END', data)
-            self.get_logger().info(f'Experiment finished: {data}')
-            self.create_timer(10.0, lambda: self.get_logger().info('Shutting down...') or exit(0), once=True)
+            self.get_logger().info(f'✅ Experiment finished: {data}')
+            self.shutdown_timer = self.create_timer(10.0, self._shutdown_callback)
             return
         
         # Actualizar objetivo
@@ -73,6 +116,12 @@ class LLMOrchestratorNode(Node):
         if not self.experiment_running:
             self.experiment_running = True
             self.start_new_cycle()
+
+    def _shutdown_callback(self):
+        """Callback para apagar el nodo tras finalizar experimento"""
+        self.get_logger().info('Shutting down orchestrator...')
+        self.shutdown_timer.cancel()  # Cancelar el timer
+        raise SystemExit(0)  # Terminar el nodo limpiamente
     
     def bug2_callback(self, msg: String):
         """Monitorea feedback del Bug2"""
