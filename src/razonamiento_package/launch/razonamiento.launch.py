@@ -4,12 +4,12 @@ from launch import LaunchDescription
 from launch_ros.actions import Node
 from launch.actions import DeclareLaunchArgument
 from launch.substitutions import LaunchConfiguration
-
+from launch.actions import TimerAction
 
 def generate_launch_description():
 
     declare_robot_name = DeclareLaunchArgument('robot_name', default_value='Pioneer_p3dx')
-    declare_control_rate = DeclareLaunchArgument('control_rate', default_value='20.0')
+    declare_control_rate = DeclareLaunchArgument('control_rate', default_value='40.0')
     declare_auto_goals = DeclareLaunchArgument('auto_generate_goals', default_value='true')
 
     # TF laser respecto a base_link
@@ -95,25 +95,25 @@ def generate_launch_description():
         parameters=[{
             'control_frequency': control_rate,       # antes control_rate
             'max_linear_speed': 4.0,
-            'max_angular_speed': 15.0,
+            'max_angular_speed': 30.0,
             'wheel_separation': 0.33,
             
-            'm_line_tolerance': 0.3,
-            'goal_reached_tolerance': 0.8,
-            'obstacle_threshold': 0.4,
-            'target_wall_distance': 0.5,
-            'wall_distance_tolerance': 0.2,
+            'm_line_tolerance': 0.2,
+            'goal_reached_tolerance': 0.2,
+            'obstacle_threshold': 0.25,
+            'target_wall_distance': 0.25,
+            'wall_distance_tolerance': 0.25,
             
-            'angular_gain': 1.5,
-            'forward_speed_ratio': 0.8,
+            'angular_gain': 2.0,
+            'forward_speed_ratio': 0.9,
             'wall_follow_speed': 1.4,
             
             'debug_log_frequency': 200,
             
             # === NUEVOS PARÁMETROS DE UNREACHABLE ===
             'enable_unreachable_detection': True,
-            'max_distance_factor': 20.0,
-            'max_state_changes': 50,
+            'max_distance_factor': 60.0,
+            'max_state_changes': 60,
             'max_wall_follow_time': 120.0,
             'feedback_rate_hz': 1.0,
         }],
@@ -181,16 +181,21 @@ def generate_launch_description():
         }]
     )
 
-    experiment_manager_node = Node(
-        package='razonamiento_package',
-        executable='experiment_manager_node',
-        name='experiment_manager',
-        output='screen',
-        parameters=[{
-            'experiment_file': LaunchConfiguration('experiment_file'),
-            'goal_distance_threshold': 0.5,
-            'check_rate_hz': 5.0,
-        }],
+    experiment_manager_node = TimerAction(
+        period=5.0,  # Esperar 5 segundos
+        actions=[
+            Node(
+                package='razonamiento_package',
+                executable='experiment_manager_node',
+                name='experiment_manager',
+                output='screen',
+                parameters=[{
+                    'experiment_file': LaunchConfiguration('experiment_file'),
+                    'goal_distance_threshold': 0.2,
+                    'check_rate_hz': 5.0,
+                }],
+            )
+        ]
     )
 
     llm_backend_node = Node(

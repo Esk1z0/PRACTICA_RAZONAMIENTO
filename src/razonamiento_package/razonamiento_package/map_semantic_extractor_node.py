@@ -2,6 +2,7 @@
 
 import rclpy
 from rclpy.node import Node
+from rclpy.qos import QoSProfile, ReliabilityPolicy, DurabilityPolicy, HistoryPolicy
 from nav_msgs.msg import OccupancyGrid
 from visualization_msgs.msg import Marker, MarkerArray
 from geometry_msgs.msg import Point
@@ -40,6 +41,14 @@ class MapSemanticExtractorNode(Node):
         self.declare_parameter('zones_file', '')  # Ruta al archivo YAML de zonas
         self.declare_parameter('default_zone_name', 'unknown')  # Nombre para nodos sin zona
         
+        # QOS
+        zone_markers_qos = QoSProfile(
+            depth=10,
+            reliability=ReliabilityPolicy.RELIABLE,
+            durability=DurabilityPolicy.TRANSIENT_LOCAL,  # ← CAMBIO CRÍTICO
+            history=HistoryPolicy.KEEP_LAST
+        )
+
         # Suscriptor al mapa
         self.map_sub = self.create_subscription(
             OccupancyGrid,
@@ -51,7 +60,7 @@ class MapSemanticExtractorNode(Node):
         # Publishers para markers
         self.marker_pub = self.create_publisher(MarkerArray, '/topological_graph_markers', 10)
         self.frontier_pub = self.create_publisher(MarkerArray, '/frontier_markers', 10)
-        self.zone_pub = self.create_publisher(MarkerArray, '/zone_markers', 10)
+        self.zone_pub = self.create_publisher(MarkerArray, '/zone_markers', zone_markers_qos)
         
         self.graph = None
         self.last_map_data = None

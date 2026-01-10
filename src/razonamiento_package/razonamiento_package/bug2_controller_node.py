@@ -96,7 +96,7 @@ class Bug2ControllerNode(Node):
         # ============= QoS =============
         goal_qos = QoSProfile(
             reliability=ReliabilityPolicy.RELIABLE,
-            durability=DurabilityPolicy.TRANSIENT_LOCAL,
+            durability=DurabilityPolicy.VOLATILE,#TRANSIENT_LOCAL,
             depth=1,
             history=HistoryPolicy.KEEP_LAST 
         )
@@ -527,19 +527,26 @@ class Bug2ControllerNode(Node):
         """Loop principal de control Bug2"""
         self.iteration += 1
         
+        # Verificar precondiciones
         if self.current_pose is None:
             if self.iteration % 50 == 0:
                 self.get_logger().warn('Esperando pose del robot...')
+            stop_cmd = Twist()
+            self.cmd_vel_pub.publish(stop_cmd)
             return
         
         if self.goal_point is None:
             if self.iteration % 50 == 0:
                 self.get_logger().warn('Esperando meta...')
+            stop_cmd = Twist()
+            self.cmd_vel_pub.publish(stop_cmd)
             return
         
         if not self.sonar_readings:
             if self.iteration % 50 == 0:
                 self.get_logger().warn('Esperando lecturas de sonares...')
+            stop_cmd = Twist()
+            self.cmd_vel_pub.publish(stop_cmd)
             return
         
         position = self.current_position
@@ -563,25 +570,35 @@ class Bug2ControllerNode(Node):
             self.cmd_vel_pub.publish(stop_cmd)
             return
         
-        # NUEVO: Verificar unreachable PERO NO DETENER
-        # Solo reportar una vez por objetivo
+        # Si estaba REACHED pero ahora está lejos, reanudar
+        if self.current_state == self.REACHED:
+            self.get_logger().info('🔄 Robot alejado de meta REACHED, reanudando')
+            self.current_state = self.MOTION_TO_GOAL
+            self.last_bug2_state = self.MOTION_TO_GOAL
+        
+        # Verificar unreachable
         if not self.unreachable_reported:
             is_unreachable, reason = self.check_unreachable()
             if is_unreachable:
                 self.unreachable_reported = True
                 self.publish_feedback(reason)
                 self.get_logger().warn('⚠ ' + reason)
-                self.get_logger().warn('⚠ Continuando navegación (esperando cambio de objetivo)...')
+                self.get_logger().warn('⚠ Continuando navegación...')
         
-        # Ejecutar comportamiento según estado Bug2 (CONTINÚA NORMALMENTE)
+        # Ejecutar comportamiento según estado
         if self.current_state == self.MOTION_TO_GOAL:
             left_speed, right_speed = self.motion_to_goal_behavior(
                 position, orientation, sensor_readings
             )
-        else:  # WALL_FOLLOWING
+        elif self.current_state == self.WALL_FOLLOWING:
             left_speed, right_speed = self.wall_following_behavior(
                 position, orientation, sensor_readings
             )
+        else:
+            self.get_logger().warn(f'⚠️ Estado desconocido: {self.current_state}, deteniendo')
+            stop_cmd = Twist()
+            self.cmd_vel_pub.publish(stop_cmd)
+            return
         
         cmd_vel = self.wheel_speeds_to_twist(left_speed, right_speed)
         self.cmd_vel_pub.publish(cmd_vel)
