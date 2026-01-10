@@ -2,11 +2,11 @@
 
 experiment:
   type: "single_goal"
-  description: "Navega a la cocina"
+  description: "Navega a la zona P2"
   
   # Objetivo por zona
   goal:
-    zone: "cocina"
+    zone: "P2"
   
   # O alternativamente, objetivo por coordenadas:
   # goal:

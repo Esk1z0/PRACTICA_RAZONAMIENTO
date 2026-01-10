@@ -176,7 +176,7 @@ def generate_launch_description():
             'compact_precision': 2,          # Decimales para floats
             'include_covariance': False,     # Incluir covarianza de pose
             'max_frontiers': 5,              # Máximo número de frontiers
-            'max_graph_nodes': 20,           # Máximo número de nodos del grafo
+            'max_graph_nodes': 300,           # Máximo número de nodos del grafo
             'sonar_threshold': 1.5,          # Distancia máxima relevante (m)
         }]
     )
@@ -188,7 +188,7 @@ def generate_launch_description():
         output='screen',
         parameters=[{
             'experiment_file': LaunchConfiguration('experiment_file'),
-            'goal_distance_threshold': 0.8,
+            'goal_distance_threshold': 0.5,
             'check_rate_hz': 5.0,
         }],
     )
@@ -210,10 +210,10 @@ def generate_launch_description():
         output='screen',
         parameters=[{
             'mode': 'react',
-            'map_min_x': -8.0,
-            'map_min_y': -3.0,
-            'map_max_x': 3.0,
-            'map_max_y': 3.0
+            'map_min_x': -2.5,
+            'map_min_y': -2.5,
+            'map_max_x': 7.5,
+            'map_max_y': 2.5
         }]
     )
     
