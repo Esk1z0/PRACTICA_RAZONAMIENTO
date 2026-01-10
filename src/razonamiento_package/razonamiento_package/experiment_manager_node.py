@@ -284,16 +284,16 @@ class ExperimentManagerNode(Node):
         if not self.experiment_running or not self.current_pose:
             return
         
-        if self.experiment_type == 'multigoal_restricted':
-            time_limit = self.experiment.get('time_limit')
-            if time_limit:
-                elapsed = time.time() - self.start_time
-                if elapsed > time_limit:
-                    self.finish_experiment(
-                        False,
-                        f"[TIMEOUT] Tiempo límite de {time_limit}s superado ({elapsed:.1f}s)."
-                    )
-                    return
+        # TIME LIMIT (para cualquier tipo de experimento)
+        time_limit = self.experiment.get('time_limit') if self.experiment else None
+        if time_limit:
+            elapsed = time.time() - self.start_time
+            if elapsed > time_limit:
+                self.finish_experiment(
+                    False,
+                    f"[TIMEOUT] Tiempo límite de {time_limit}s superado ({elapsed:.1f}s)."
+                )
+                return
         
         if self.experiment_type == 'multigoal_restricted':
             violation = self.check_forbidden_zones()

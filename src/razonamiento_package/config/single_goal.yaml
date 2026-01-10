@@ -2,9 +2,10 @@
 
 experiment:
   type: "single_goal"
-  description: "Navega a la zona P2"
+  description: "Navega a la zona S6"
   goal:
-    zone: "P2"
+    zone: "S6"
+  time_limit: 600
   
   # O alternativamente, objetivo por coordenadas:
   # goal:

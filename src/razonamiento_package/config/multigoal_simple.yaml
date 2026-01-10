@@ -5,8 +5,11 @@ experiment:
   description: "Visita todas las habitaciones principales"
   
   goals:
-    - zone: "salon"
-    - zone: "cocina"
-    - zone: "habitacion"
+    - zone: "S2"
+    - zone: "S3"
+    - zone: "S5"
+    - zone: "S7"
+  
+  time_limit: 600
     # También se pueden mezclar zonas y coordenadas:
-    - coordinates: [1.5, 3.2]
+    #- coordinates: [1.5, 3.2]

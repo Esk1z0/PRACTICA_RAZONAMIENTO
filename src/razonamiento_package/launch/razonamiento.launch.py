@@ -99,10 +99,10 @@ def generate_launch_description():
             'wheel_separation': 0.33,
             
             'm_line_tolerance': 0.2,
-            'goal_reached_tolerance': 0.2,
+            'goal_reached_tolerance': 0.3,
             'obstacle_threshold': 0.25,
-            'target_wall_distance': 0.25,
-            'wall_distance_tolerance': 0.25,
+            'target_wall_distance': 0.2,
+            'wall_distance_tolerance': 0.2,
             
             'angular_gain': 2.0,
             'forward_speed_ratio': 0.9,
